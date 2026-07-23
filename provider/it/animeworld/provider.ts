@@ -36,6 +36,9 @@ class Provider {
     async search(opts: SearchOptions): Promise<SearchResult[]> {
         if (!opts.query.trim()) return []
         console.log("[AnimeWorld] search query:", opts.query)
+
+        let keywords = opts.query.toLowerCase().split(/[\s,.-]+/).filter(function(w) { return w.length > 2 })
+
         let res = await fetch(this._url("/search?keyword=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
         console.log("[AnimeWorld] search status:", res.status)
         if (!res.ok) return []
@@ -48,7 +51,14 @@ class Provider {
             let linkM = parts[i].match(/href="\/play\/([^"]+)"/)
             let titleM = parts[i].match(/class="name"[^>]*>([^<]+)</)
             if (linkM && titleM) {
-                results.push({ id: linkM[1], title: titleM[1], url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
+                let title = titleM[1]
+                let titleLower = title.toLowerCase()
+                let matches = keywords.length === 0 || keywords.some(function(k) { return titleLower.indexOf(k) !== -1 })
+                if (matches) {
+                    results.push({ id: linkM[1], title: title, url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
+                } else {
+                    console.log("[AnimeWorld] filtered out:", title)
+                }
             } else {
                 console.log("[AnimeWorld] search item", i, "failed to parse - link:", !!linkM, "title:", !!titleM)
             }
