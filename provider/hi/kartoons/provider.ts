@@ -149,18 +149,54 @@ class Provider {
         return res.json()
     }
 
+    _stealthJs = `
+(function() {
+    var p = Object.getOwnPropertyDescriptor(navigator.constructor.prototype, 'webdriver');
+    if (p && p.configurable) {
+        Object.defineProperty(navigator, 'webdriver', { get: function() { return false } });
+    }
+    var pl = navigator.plugins;
+    if (pl && pl.length === 0) {
+        Object.defineProperty(navigator, 'plugins', { get: function() { return [1, 2, 3, 4, 5] } });
+    }
+    if (!window.chrome || !window.chrome.runtime) {
+        window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+    }
+    try {
+        var f = Object.defineProperty;
+        f(navigator, 'hardwareConcurrency', { get: function() { return 8 } });
+    } catch(e) {}
+})();
+`
+
     async _extractFromChromeDP(playerUrl: string): Promise<EpisodeServer> {
         console.log("[Kartoons] launching ChromeDP for player page at:", playerUrl)
         let browser
         try {
-            browser = await ChromeDP.newBrowser({ headless: false, timeout: 180 })
-            console.log("[Kartoons] browser launched, navigating...")
+            browser = await ChromeDP.newBrowser({
+                headless: false,
+                timeout: 180,
+                args: [
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--exclude-switches=enable-automation",
+                    "--window-size=1920,1080",
+                ],
+                userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                viewport: { width: 1920, height: 1080 },
+            })
+            console.log("[Kartoons] browser launched with stealth config")
         } catch (e) {
             console.log("[Kartoons] failed to launch ChromeDP browser:", e)
             throw new Error("ChromeDP browser launch failed: " + e)
         }
 
         try {
+            console.log("[Kartoons] injecting stealth patches before navigation...")
+            await browser.navigate("about:blank")
+            await browser.evaluate(this._stealthJs)
             await browser.navigate(playerUrl)
             console.log("[Kartoons] page loaded, waiting for React SPA to render...")
             await browser.sleep(8000)
@@ -170,30 +206,26 @@ class Provider {
             while (Date.now() < deadline) {
                 pollCount++
                 let result = await browser.evaluate(`(() => {
-                    // 1. check for video element
                     var v = document.querySelector('video');
                     if (v && v.readyState > 0) {
                         return { found: true, type: 'video', url: v.currentSrc || v.src || '' };
                     }
-                    // 2. check for iframe embed
                     var f = document.querySelector('iframe');
                     if (f && f.src && f.src.indexOf('http') === 0) {
                         return { found: true, type: 'iframe', url: f.src };
                     }
-                    // 3. scan page text for m3u8
                     var html = document.body ? document.body.innerHTML : '';
                     var m3u = html.match(/https?:\\\/\\\/[^'"\\s<>]+\\.m3u8[^'"\\s<>]*/);
                     if (m3u) {
                         return { found: true, type: 'm3u8', url: m3u[0] };
                     }
-                    // 4. scan for mp4
                     var mp4 = html.match(/https?:\\\/\\\/[^'"\\s<>]+\\.mp4[^'"\\s<>]*/);
                     if (mp4) {
                         return { found: true, type: 'mp4', url: mp4[0] };
                     }
-                    // 5. check for Turnstile widget (are we even showing the challenge?)
                     var turnstileIframe = document.querySelector('iframe[src*="challenges"], iframe[src*="turnstile"], iframe[src*="cf-turnstile"]');
-                    return { found: false, hasTurnstile: !!turnstileIframe, videoCount: document.querySelectorAll('video').length, iframeCount: document.querySelectorAll('iframe').length };
+                    var w = navigator.webdriver;
+                    return { found: false, hasTurnstile: !!turnstileIframe, webdriver: w, videoCount: document.querySelectorAll('video').length, iframeCount: document.querySelectorAll('iframe').length };
                 })()`)
 
                 if (result && result.found) {
@@ -212,7 +244,7 @@ class Provider {
                     }
                 }
 
-                console.log("[Kartoons] poll", pollCount, "- no source yet, hasTurnstile:", result && result.hasTurnstile, "videos:", result && result.videoCount, "iframes:", result && result.iframeCount)
+                console.log("[Kartoons] poll", pollCount, "- no source yet, hasTurnstile:", result && result.hasTurnstile, "webdriver:", result && result.webdriver, "videos:", result && result.videoCount, "iframes:", result && result.iframeCount)
                 await browser.sleep(3000)
             }
 

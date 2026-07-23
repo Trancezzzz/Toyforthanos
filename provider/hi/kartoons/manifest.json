@@ -3,7 +3,7 @@
   "name": "Kartoons",
   "description": "Kartoons.me Hindi anime & cartoon streaming provider.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/hi/kartoons/manifest.json",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "author": "Trancezzz",
   "type": "onlinestream-provider",
   "language": "typescript",
