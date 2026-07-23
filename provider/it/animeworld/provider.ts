@@ -33,17 +33,7 @@ class Provider {
         return { episodeServers: ["AnimeWorld"], supportsDub: false }
     }
 
-    async search(opts: SearchOptions): Promise<SearchResult[]> {
-        if (!opts.query.trim()) return []
-        console.log("[AnimeWorld] search query:", opts.query)
-
-        let keywords = opts.query.toLowerCase().split(/[\s,.-]+/).filter(function(w) { return w.length > 2 })
-
-        let res = await fetch(this._url("/search?keyword=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
-        console.log("[AnimeWorld] search status:", res.status)
-        if (!res.ok) return []
-        let html = await res.text()
-        console.log("[AnimeWorld] search HTML length:", html.length)
+    async _parseSearchPage(html: string, keywords: string[]): Promise<SearchResult[]> {
         let results: SearchResult[] = []
         let parts = html.split('<div class="item">')
         console.log("[AnimeWorld] search found", parts.length - 1, "item blocks")
@@ -52,17 +42,54 @@ class Provider {
             let titleM = parts[i].match(/class="name"[^>]*>([^<]+)</)
             if (linkM && titleM) {
                 let title = titleM[1]
-                let titleLower = title.toLowerCase()
-                let matches = keywords.length === 0 || keywords.some(function(k) { return titleLower.indexOf(k) !== -1 })
-                if (matches) {
+                if (keywords.length === 0) {
                     results.push({ id: linkM[1], title: title, url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
                 } else {
-                    console.log("[AnimeWorld] filtered out:", title)
+                    let titleLower = title.toLowerCase()
+                    let matches = keywords.some(function(k) { return titleLower.indexOf(k) !== -1 })
+                    if (matches) {
+                        results.push({ id: linkM[1], title: title, url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
+                    } else {
+                        console.log("[AnimeWorld] filtered out:", title)
+                    }
                 }
             } else {
                 console.log("[AnimeWorld] search item", i, "failed to parse - link:", !!linkM, "title:", !!titleM)
             }
         }
+        return results
+    }
+
+    async search(opts: SearchOptions): Promise<SearchResult[]> {
+        if (!opts.query.trim()) return []
+        console.log("[AnimeWorld] search query:", opts.query)
+
+        let keywords = opts.query.toLowerCase().split(/[\s,.-]+/).filter(function(w) { return w.length > 2 })
+
+        let res = await fetch(this._url("/search?keyword=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
+        console.log("[AnimeWorld] search status:", res.status)
+        let results: SearchResult[] = []
+        if (res.ok) {
+            let html = await res.text()
+            results = await this._parseSearchPage(html, keywords)
+        }
+
+        // If no results and query has non-Latin chars (Japanese, etc.), 
+        // extract Latin words and try a second search
+        if (results.length === 0) {
+            let latinWords = opts.query.match(/[a-zA-Z]+/g)
+            if (latinWords && latinWords.length > 0) {
+                let latinQuery = latinWords.join(" ")
+                console.log("[AnimeWorld] fallback latin search:", latinQuery)
+                let latinRes = await fetch(this._url("/search?keyword=" + encodeURIComponent(latinQuery)), { headers: this._headers(this.base) })
+                if (latinRes.ok) {
+                    let latinHtml = await latinRes.text()
+                    let latinKeywords = latinQuery.toLowerCase().split(" ").filter(function(w) { return w.length > 2 })
+                    results = await this._parseSearchPage(latinHtml, latinKeywords)
+                }
+            }
+        }
+
         console.log("[AnimeWorld] search total results:", results.length)
         return results
     }
