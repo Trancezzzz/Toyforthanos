@@ -117,7 +117,7 @@ class Provider {
     }
 
     async _extractVideoSources(playerUrl: string, referer: string): Promise<VideoSource[]> {
-        console.log("[AnimeWorld] _extractVideoSources:", playerUrl.substring(0, 60))
+        console.log("[AnimeWorld] _extractVideoSources:", playerUrl.substring(0, 80))
         const res = await fetch(playerUrl, {
             headers: { "User-Agent": "Mozilla/5.0", Referer: referer },
         })
@@ -126,40 +126,42 @@ class Provider {
         }
 
         const html = await res.text()
-        console.log("[AnimeWorld] player HTML:", html.length, "bytes")
+        console.log("[AnimeWorld] player HTML:", html.length, "bytes, first 300:", html.substring(0, 300))
 
         const sources: VideoSource[] = []
         const subs: { id: string; url: string; language: string; isDefault: boolean }[] = []
 
-        const videoStart = html.indexOf("<video")
-        if (videoStart !== -1) {
-            const videoEnd = html.indexOf("</video>", videoStart)
-            const vblock = videoEnd !== -1 ? html.substring(videoStart, videoEnd + 8) : html.substring(videoStart, videoStart + 5000)
-
-            const srcParts = vblock.split('<source')
-            for (let s = 1; s < srcParts.length; s++) {
-                const srcM = srcParts[s].match(/src="([^"]+)"/)
-                if (srcM && !sources.some(function (x) { return x.url === srcM[1] })) {
-                    sources.push({
-                        url: srcM[1],
-                        quality: "auto",
-                        type: srcM[1].indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
-                        subtitles: [],
-                    })
-                }
-            }
-
-            const directM = vblock.match(/<video[^>]*src="([^"]+)"/)
-            if (directM && !sources.some(function (x) { return x.url === directM[1] })) {
+        const sourceParts = html.split("<source")
+        console.log("[AnimeWorld] <source> tags found:", sourceParts.length - 1)
+        for (let s = 1; s < sourceParts.length; s++) {
+            const srcM = sourceParts[s].match(/src="([^"]+)"/)
+            if (srcM && !sources.some(function (x) { return x.url === srcM[1] })) {
+                const url = srcM[1]
+                console.log("[AnimeWorld] found <source> src:", url.substring(0, 80))
                 sources.push({
-                    url: directM[1],
+                    url: url,
                     quality: "auto",
-                    type: directM[1].indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
+                    type: url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
+                    subtitles: [],
+                })
+            }
+        }
+
+        const videoParts = html.split("<video")
+        for (let v = 1; v < videoParts.length; v++) {
+            const srcM = videoParts[v].match(/src="([^"]+)"/)
+            if (srcM && !sources.some(function (x) { return x.url === srcM[1] })) {
+                const url = srcM[1]
+                console.log("[AnimeWorld] found <video src>:", url.substring(0, 80))
+                sources.push({
+                    url: url,
+                    quality: "auto",
+                    type: url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
                     subtitles: [],
                 })
             }
 
-            const trackParts = vblock.split("<track")
+            const trackParts = videoParts[v].split("<track")
             for (let t = 1; t < trackParts.length; t++) {
                 const srcM = trackParts[t].match(/src="([^"]+)"/)
                 const langM = trackParts[t].match(/label="([^"]*)"/) || trackParts[t].match(/srclang="([^"]*)"/)
@@ -174,17 +176,49 @@ class Provider {
             }
         }
 
-        const urlParts = html.split(/https?:\/\//)
-        for (let u = 0; u < urlParts.length; u++) {
-            const m = urlParts[u].match(/^[^"'\s<>]+\.(m3u8|mp4)[^"'\s<>]*/)
-            if (m && !sources.some(function (x) { return x.url === "https://" + m[0] })) {
+        const scriptParts = html.split("<script")
+        for (let c = 1; c < scriptParts.length; c++) {
+            const scriptBody = scriptParts[c]
+            const closeTag = scriptBody.indexOf("</script>")
+            const js = closeTag !== -1 ? scriptBody.substring(0, closeTag) : scriptBody
+
+            var idx = 0
+            while (true) {
+                idx = js.indexOf("https://", idx)
+                if (idx === -1) break
+                var end = idx + 8
+                while (end < js.length && js[end] !== '"' && js[end] !== "'" && js[end] !== " " && js[end] !== ">" && js[end] !== "\n" && js[end] !== "\r" && js[end] !== "\t") end++
+                var url = js.substring(idx, end)
+                if ((url.indexOf(".mp4") !== -1 || url.indexOf(".m3u8") !== -1) && !sources.some(function (x) { return x.url === url })) {
+                    console.log("[AnimeWorld] URL in script:", url.substring(0, 80))
+                    sources.push({
+                        url: url,
+                        quality: "auto",
+                        type: url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
+                        subtitles: [],
+                    })
+                }
+                idx = end
+            }
+        }
+
+        var idx = 0
+        while (true) {
+            idx = html.indexOf("https://", idx)
+            if (idx === -1) break
+            var end = idx + 8
+            while (end < html.length && html[end] !== '"' && html[end] !== "'" && html[end] !== " " && html[end] !== ">" && html[end] !== "\n" && html[end] !== "\r" && html[end] !== "\t") end++
+            var url = html.substring(idx, end)
+            if ((url.indexOf(".mp4") !== -1 || url.indexOf(".m3u8") !== -1) && !sources.some(function (x) { return x.url === url })) {
+                console.log("[AnimeWorld] URL in HTML:", url.substring(0, 80))
                 sources.push({
-                    url: "https://" + m[0],
+                    url: url,
                     quality: "auto",
-                    type: m[1] === "m3u8" ? "m3u8" : "mp4",
+                    type: url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
                     subtitles: [],
                 })
             }
+            idx = end
         }
 
         if (sources.length > 0 && subs.length > 0) {
@@ -192,6 +226,7 @@ class Provider {
         }
 
         if (sources.length === 0) {
+            console.log("[AnimeWorld] no sources found, returning iframe URL directly")
             sources.push({ url: playerUrl, quality: "auto", type: "unknown", subtitles: [] })
         }
 
