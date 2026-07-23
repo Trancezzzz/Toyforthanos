@@ -25,23 +25,24 @@ class Provider {
         return { name: id.substring(0, lastDash), animeId: id.substring(lastDash + 1) }
     }
 
-    _episodeIdFromToken(token: string): string {
+    async _scrapeEpisodeData(episodeUrl: string): Promise<{ anilistId: string, streamToken: string }> {
+        console.log("[HiAnime] scraping episode data from:", episodeUrl.substring(0, 70))
+        let res = await fetch(episodeUrl, { headers: this._headers(this.base) })
+        if (!res.ok) {
+            console.log("[HiAnime] scrape failed:", res.status)
+            return { anilistId: "", streamToken: "" }
+        }
+        let html = await res.text()
+        let aniM = html.match(/var anilistId\s*=\s*(\d+)/)
+        let tokenM = html.match(/data-stream-token="([^"]+)"/)
+        console.log("[HiAnime] anilistId:", aniM ? aniM[1] : "not found", "token:", tokenM ? "found" : "not found")
+        return { anilistId: aniM ? aniM[1] : "", streamToken: tokenM ? tokenM[1] : "" }
+    }
+
+    _tokenToEpisodeId(token: string): string {
         if (!token) return ""
         let d = this._b64decode(token)
         return d.split(":")[0]
-    }
-
-    async _scrapeAnilistId(episodeUrl: string): Promise<string> {
-        console.log("[HiAnime] scraping anilistId from:", episodeUrl)
-        let res = await fetch(episodeUrl, { headers: this._headers(this.base) })
-        if (!res.ok) {
-            console.log("[HiAnime] anilistId scrape failed:", res.status)
-            return ""
-        }
-        let html = await res.text()
-        let m = html.match(/var anilistId\s*=\s*(\d+)/)
-        console.log("[HiAnime] anilistId:", m ? m[1] : "not found")
-        return m ? m[1] : ""
     }
 
     _versionFromServer(server: string): string {
@@ -120,9 +121,9 @@ class Provider {
                 let num = parseInt(numM[1], 10)
                 if (!episodes.some(function (e) { return e.number === num })) {
                     episodes.push({
-                        id: tokenM ? tokenM[1] : numM[1],
+                        id: numM[1],
                         number: num,
-                        url: urlM[1],
+                        url: urlM[1].indexOf("http") === 0 ? urlM[1] : this.base + urlM[1],
                         title: titleM ? titleM[1] : "Episode " + num,
                     })
                 }
@@ -139,21 +140,19 @@ class Provider {
         console.log("[HiAnime] findEpisodeServer ep:", episode.number, "server:", server)
         let version = this._versionFromServer(server)
         let key = this._serverKey(server)
+        let data = await this._scrapeEpisodeData(episode.url)
         let url = ""
 
         if (key === "volt") {
-            let anilistId = await this._scrapeAnilistId(episode.url)
-            if (anilistId) url = "https://vidnest.fun/anime/" + anilistId + "/" + episode.number + "/" + version
+            if (data.anilistId) url = "https://vidnest.fun/anime/" + data.anilistId + "/" + episode.number + "/" + version
         } else if (key === "warp") {
-            let anilistId = await this._scrapeAnilistId(episode.url)
-            if (anilistId) url = "https://tryembed.us.cc/embed/anime/" + anilistId + "/" + episode.number + "/" + version
+            if (data.anilistId) url = "https://tryembed.us.cc/embed/anime/" + data.anilistId + "/" + episode.number + "/" + version
         } else if (key === "ayame") {
-            let anilistId = await this._scrapeAnilistId(episode.url)
-            if (anilistId) url = "https://vidnest.fun/animepahe/" + anilistId + "/" + episode.number + "/" + version
+            if (data.anilistId) url = "https://vidnest.fun/animepahe/" + data.anilistId + "/" + episode.number + "/" + version
         }
 
         if (!url) {
-            let epId = this._episodeIdFromToken(episode.id)
+            let epId = this._tokenToEpisodeId(data.streamToken)
             if (epId) url = "https://megaplay.buzz/stream/s-2/" + epId + "/" + version
         }
 
