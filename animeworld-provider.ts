@@ -78,22 +78,54 @@ class Provider {
         const csrfToken = csrfM[1]
         console.log("[AnimeWorld] CSRF:", csrfToken.substring(0, 10) + "...")
 
-        const apiRes = await fetch(this.base + "/api/episode/info", {
-            method: "POST",
-            headers: {
-                "CSRF-Token": csrfToken,
-                "Content-Type": "application/json",
-                "User-Agent": this.UA,
-                Referer: episode.url,
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            body: JSON.stringify({ id: episode.id, alt: "0" }),
-        })
-        if (!apiRes.ok) throw new Error("API error " + apiRes.status + " " + (await apiRes.text()))
+        var cookies = ""
+        try {
+            var h = res.headers
+            if (h) {
+                var raw = h.get("Set-Cookie") || h.get("set-cookie") || ""
+                console.log("[AnimeWorld] raw Set-Cookie:", raw.substring(0, 100))
+                var cookieParts = raw.split(",")
+                for (var ci = 0; ci < cookieParts.length; ci++) {
+                    var cval = cookieParts[ci].split(";")[0].trim()
+                    if (cval.length > 0) {
+                        if (cookies.length > 0) cookies += "; "
+                        cookies += cval
+                    }
+                }
+            }
+        } catch (e) {
+            console.log("[AnimeWorld] cookie extraction error:", e)
+        }
+        console.log("[AnimeWorld] cookies:", cookies.substring(0, 60))
 
-        const apiData = JSON.parse(await apiRes.text())
-        const target = apiData.target || ""
-        console.log("[AnimeWorld] API target:", target.substring(0, 80))
+        var apiHeaders = {
+            "CSRF-Token": csrfToken,
+            "Content-Type": "application/json",
+            "User-Agent": this.UA,
+            Referer: episode.url,
+            "X-Requested-With": "XMLHttpRequest",
+            Origin: this.base,
+            Accept: "application/json, text/plain, */*",
+        }
+        if (cookies.length > 0) apiHeaders["Cookie"] = cookies
+
+        try {
+            const apiRes = await fetch(this.base + "/api/episode/info", {
+                method: "POST",
+                headers: apiHeaders,
+                body: JSON.stringify({ id: episode.id, alt: "0" }),
+                credentials: "same-origin",
+            })
+            if (!apiRes.ok) throw new Error("API error " + apiRes.status + " " + (await apiRes.text()))
+            var apiText = await apiRes.text()
+            console.log("[AnimeWorld] API response:", apiText.substring(0, 200))
+            var apiData = JSON.parse(apiText)
+            var target = apiData.target || ""
+            console.log("[AnimeWorld] API target:", target.substring(0, 80))
+        } catch (e) {
+            console.log("[AnimeWorld] API error:", e)
+            throw e
+        }
 
         if (!target) throw new Error("No video target")
 
