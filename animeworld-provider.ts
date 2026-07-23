@@ -13,13 +13,11 @@ class Provider {
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
         console.log("[AnimeWorld] search called with query:", opts.query)
-        if (!opts.query.trim()) {
-            console.warn("[AnimeWorld] search: empty query")
-            return []
-        }
+        if (!opts.query.trim()) return []
 
         const url = `${this.base}/search?keyword=${encodeURIComponent(opts.query)}`
         console.log("[AnimeWorld] search: fetching", url)
+
         const res = await fetch(url, {
             headers: {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -27,30 +25,28 @@ class Provider {
             },
         })
         if (!res.ok) {
-            console.warn("[AnimeWorld] search: fetch failed with status", res.status)
+            console.warn("[AnimeWorld] search: fetch failed", res.status)
             return []
         }
 
         const html = await res.text()
         console.log("[AnimeWorld] search: got HTML length", html.length)
-        const $ = LoadDoc(html)
 
         const results: SearchResult[] = []
-        $(".film-list .item").each((_, el) => {
-            const link = $(el).find(".inner a.poster").attr("href")
-            const title = $(el).find(".inner a.name").text().trim()
-            if (!link || !title) return
-
-            const match = link.match(/^\/play\/(.+)$/)
-            if (!match) return
-
-            results.push({
-                id: match[1],
-                title,
-                url: `${this.base}/play/${match[1]}`,
-                subOrDub: "sub",
-            })
-        })
+        const itemRegex = /<div\s+class="item">[\s\S]*?<a\s+href="\/play\/([^"]+)"\s+class="poster"[\s\S]*?class="name">([^<]+)<\/a>/g
+        let match
+        while ((match = itemRegex.exec(html)) !== null) {
+            const id = match[1].trim()
+            const title = match[2].trim()
+            if (id && title) {
+                results.push({
+                    id,
+                    title,
+                    url: `${this.base}/play/${id}`,
+                    subOrDub: "sub",
+                })
+            }
+        }
 
         console.log("[AnimeWorld] search: returning", results.length, "results")
         return results
@@ -58,43 +54,38 @@ class Provider {
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
         const url = `${this.base}/play/${id}`
-        console.log("[AnimeWorld] findEpisodes called with id:", id)
-        console.log("[AnimeWorld] findEpisodes: fetching", url)
+        console.log("[AnimeWorld] findEpisodes called with id:", id, "url:", url)
+
         const res = await fetch(url, {
             headers: {
-                "User-Agent":
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 Referer: this.base,
             },
         })
-        if (!res.ok) throw new Error(`[AnimeWorld] findEpisodes: fetch failed with status ${res.status}`)
+        if (!res.ok) throw new Error(`[AnimeWorld] findEpisodes: fetch failed ${res.status}`)
 
         const html = await res.text()
         console.log("[AnimeWorld] findEpisodes: got HTML length", html.length)
 
-        const $ = LoadDoc(html)
-
         const episodes: EpisodeDetails[] = []
-        $(".server.active ul.episodes.range li a").each((_, el) => {
-            const $el = $(el)
-            const epToken = $el.attr("data-id")
-            const epNum = $el.attr("data-episode-num")
-            const epHref = $el.attr("href")
-            if (!epToken || !epNum) return
-
-            const num = parseInt(epNum, 10)
-            if (!Number.isInteger(num)) return
+        const epRegex = /<a[^>]*?data-id="([^"]+)"[^>]*?data-episode-num="(\d+)"[^>]*?href="([^"]+)"[^>]*>(?:\s*)(\d+)(?:\s*)<\/a>/g
+        let match
+        while ((match = epRegex.exec(html)) !== null) {
+            const epToken = match[1]
+            const epNum = parseInt(match[2], 10)
+            const epHref = match[3]
+            if (!epToken || !Number.isInteger(epNum)) continue
 
             episodes.push({
                 id: epToken,
-                number: num,
-                url: epHref ? `${this.base}${epHref.startsWith("/") ? "" : "/"}${epHref}` : url,
-                title: `Episode ${num}`,
+                number: epNum,
+                url: epHref.startsWith("http") ? epHref : `${this.base}${epHref.startsWith("/") ? "" : "/"}${epHref}`,
+                title: `Episode ${epNum}`,
             })
-        })
+        }
 
         if (episodes.length === 0) {
-            console.error("[AnimeWorld] findEpisodes: no episodes found on page")
+            console.error("[AnimeWorld] findEpisodes: no episodes found")
             throw new Error("No episodes found.")
         }
 
@@ -105,21 +96,17 @@ class Provider {
 
     async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
         const serverName = "AnimeWorld"
-        const episodeUrl = episode.url
-        console.log("[AnimeWorld] findEpisodeServer called")
-        console.log("[AnimeWorld] findEpisodeServer: episode id:", episode.id, "number:", episode.number)
-        console.log("[AnimeWorld] findEpisodeServer: episode url:", episodeUrl)
-        console.log("[AnimeWorld] findEpisodeServer: server:", _server)
+        console.log("[AnimeWorld] findEpisodeServer: id:", episode.id, "num:", episode.number, "url:", episode.url)
 
+        const epPageUrl = episode.url
         console.log("[AnimeWorld] findEpisodeServer: fetching episode page for CSRF token")
-        const res = await fetch(episodeUrl, {
+        const res = await fetch(epPageUrl, {
             headers: {
-                "User-Agent":
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 Referer: this.base,
             },
         })
-        if (!res.ok) throw new Error(`[AnimeWorld] findEpisodeServer: page fetch failed with status ${res.status}`)
+        if (!res.ok) throw new Error(`[AnimeWorld] findEpisodeServer: page fetch failed ${res.status}`)
 
         const html = await res.text()
         console.log("[AnimeWorld] findEpisodeServer: got HTML length", html.length)
@@ -127,170 +114,128 @@ class Provider {
         const csrfMatch = html.match(/window\.csrfToken\s*=\s*['"]([^'"]+)['"]/)
             || html.match(/<meta[^>]+name="csrf-token"[^>]+content="([^"]+)"[^>]*>/)
         if (!csrfMatch) {
-            console.error("[AnimeWorld] findEpisodeServer: CSRF token not found in page")
+            console.error("[AnimeWorld] findEpisodeServer: CSRF token not found")
             throw new Error("CSRF token not found")
         }
         const csrfToken = csrfMatch[1]
-        console.log("[AnimeWorld] findEpisodeServer: found CSRF token:", csrfToken.substring(0, 10) + "...")
+        console.log("[AnimeWorld] findEpisodeServer: CSRF token:", csrfToken.substring(0, 10) + "...")
 
         const apiUrl = `${this.base}/api/episode/info`
         const apiBody = JSON.stringify({ id: episode.id, alt: "0" })
-        console.log("[AnimeWorld] findEpisodeServer: POSTing to", apiUrl)
-        console.log("[AnimeWorld] findEpisodeServer: request body:", apiBody)
+        console.log("[AnimeWorld] findEpisodeServer: POST", apiUrl, apiBody)
 
         const apiRes = await fetch(apiUrl, {
             method: "POST",
             headers: {
                 "CSRF-Token": csrfToken,
                 "Content-Type": "application/json",
-                "User-Agent":
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                Referer: episodeUrl,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                Referer: epPageUrl,
                 "X-Requested-With": "XMLHttpRequest",
             },
             body: apiBody,
         })
         if (!apiRes.ok) {
             const text = await apiRes.text()
-            console.error("[AnimeWorld] findEpisodeServer: API returned", apiRes.status, text)
+            console.error("[AnimeWorld] findEpisodeServer: API error", apiRes.status, text)
             throw new Error(`API error ${apiRes.status}: ${text}`)
         }
 
         const apiData = JSON.parse(await apiRes.text()) as { target: string }
-        console.log("[AnimeWorld] findEpisodeServer: API response:", JSON.stringify(apiData))
+        console.log("[AnimeWorld] findEpisodeServer: API response target:", apiData.target)
 
-        if (!apiData.target) {
-            console.error("[AnimeWorld] findEpisodeServer: no target field in API response")
-            throw new Error("No video target found")
-        }
-        console.log("[AnimeWorld] findEpisodeServer: got player URL:", apiData.target)
+        if (!apiData.target) throw new Error("No video target found")
 
-        const videoSources = await this._extractVideoSources(apiData.target, episodeUrl)
-        console.log("[AnimeWorld] findEpisodeServer: extracted", videoSources.length, "video sources")
+        const videoSources = await this._extractVideoSources(apiData.target, epPageUrl)
+        console.log("[AnimeWorld] findEpisodeServer: returning", videoSources.length, "sources")
 
         return {
             server: serverName,
             headers: {
                 Referer: apiData.target,
-                "User-Agent":
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             },
             videoSources,
         }
     }
 
     async _extractVideoSources(playerUrl: string, referer: string): Promise<VideoSource[]> {
-        console.log("[AnimeWorld] _extractVideoSources: fetching player URL:", playerUrl)
+        console.log("[AnimeWorld] _extractVideoSources: fetching", playerUrl)
         const res = await fetch(playerUrl, {
             headers: {
-                "User-Agent":
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 Referer: referer,
             },
         })
         if (!res.ok) {
-            console.warn("[AnimeWorld] _extractVideoSources: player fetch failed with status", res.status, "- returning player URL as unknown source")
-            return [
-                {
-                    url: playerUrl,
-                    quality: "auto",
-                    type: "unknown",
-                    subtitles: [],
-                },
-            ]
+            console.warn("[AnimeWorld] _extractVideoSources: fetch failed", res.status, "- returning player URL as unknown")
+            return [{ url: playerUrl, quality: "auto", type: "unknown", subtitles: [] }]
         }
 
         const html = await res.text()
-        console.log("[AnimeWorld] _extractVideoSources: got player HTML length", html.length)
-        const $ = LoadDoc(html)
+        console.log("[AnimeWorld] _extractVideoSources: HTML length", html.length)
+
         const sources: VideoSource[] = []
+        const subtitles: { id: string; url: string; language: string; isDefault: boolean }[] = []
 
-        $("video source").each((_, el) => {
-            const src = $(el).attr("src")
-            if (!src || sources.some((s) => s.url === src)) return
-            const type = src.includes(".m3u8") ? "m3u8" : "mp4"
-            console.log("[AnimeWorld] _extractVideoSources: found <video source>", type, src)
-            sources.push({
-                url: src,
-                quality: "auto",
-                type,
-                subtitles: [],
-            })
-        })
-
-        $("video[data-setup]").each((_, el) => {
-            const src = $(el).attr("src")
-            if (!src || sources.some((s) => s.url === src)) return
-            const type = src.includes(".m3u8") ? "m3u8" : "mp4"
-            console.log("[AnimeWorld] _extractVideoSources: found video[data-setup] src", type, src)
-            sources.push({
-                url: src,
-                quality: "auto",
-                type,
-                subtitles: [],
-            })
-        })
-
-        $("script").each((_, el) => {
-            const text = $(el).text()
-            if (!text) return
-
-            const urlRegex = /https?:\/\/[^"'\s<>]+\.(?:m3u8|mp4)[^"'\s<>]*/g
+        const videoRegex = /<video[^>]*>([\s\S]*?)<\/video>/i
+        const videoMatch = html.match(videoRegex)
+        if (videoMatch) {
+            const videoBlock = videoMatch[1]
+            const srcRegex = /<source[^>]*?src="([^"]+)"[^>]*>/g
             let m
-            while ((m = urlRegex.exec(text)) !== null) {
-                if (!sources.some((s) => s.url === m[0])) {
-                    console.log("[AnimeWorld] _extractVideoSources: found URL in script:", m[0])
-                    sources.push({
-                        url: m[0],
-                        quality: "auto",
-                        type: m[0].includes(".m3u8") ? "m3u8" : "mp4",
-                        subtitles: [],
-                    })
+            while ((m = srcRegex.exec(videoBlock)) !== null) {
+                const src = m[1]
+                const isM3u8 = src.includes(".m3u8")
+                console.log("[AnimeWorld] _extractVideoSources: <source>", src)
+                if (!sources.some((s) => s.url === src)) {
+                    sources.push({ url: src, quality: "auto", type: isM3u8 ? "m3u8" : "mp4", subtitles: [] })
                 }
             }
 
-            const configRegex = /["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/g
-            while ((m = configRegex.exec(text)) !== null) {
-                const url = m[1]
-                if (!sources.some((s) => s.url === url)) {
-                    console.log("[AnimeWorld] _extractVideoSources: found URL in script config:", url)
-                    sources.push({
-                        url,
-                        quality: "auto",
-                        type: url.includes(".m3u8") ? "m3u8" : "mp4",
-                        subtitles: [],
-                    })
+            const directSrcRegex = /<video[^>]*?src="([^"]+)"[^>]*>/i
+            const directMatch = videoBlock.match(directSrcRegex) || html.match(/<video[^>]*?src="([^"]+)"[^>]*>/i)
+            if (directMatch) {
+                const src = directMatch[1]
+                if (!sources.some((s) => s.url === src)) {
+                    const isM3u8 = src.includes(".m3u8")
+                    console.log("[AnimeWorld] _extractVideoSources: video[src]", src)
+                    sources.push({ url: src, quality: "auto", type: isM3u8 ? "m3u8" : "mp4", subtitles: [] })
                 }
             }
-        })
 
-        $("track").each((_, el) => {
-            const src = $(el).attr("src")
-            const lang = $(el).attr("srclang") || $(el).attr("label") || "unknown"
-            if (!src || sources.length === 0) return
-
-            console.log("[AnimeWorld] _extractVideoSources: found subtitle track, lang:", lang)
-            sources[0].subtitles.push({
-                id: lang,
-                url: src.startsWith("http")
-                    ? src
-                    : `${this.base}${src.startsWith("/") ? "" : "/"}${src}`,
-                language: lang,
-                isDefault: $(el).attr("default") !== undefined,
-            })
-        })
-
-        if (sources.length === 0) {
-            console.warn("[AnimeWorld] _extractVideoSources: no video sources found, returning player URL as unknown")
-            sources.push({
-                url: playerUrl,
-                quality: "auto",
-                type: "unknown",
-                subtitles: [],
-            })
+            const trackRegex = /<track[^>]*?src="([^"]+)"[^>]*?(?:srclang="([^"]*)")?[^>]*?(?:label="([^"]*)")?[^>]*?(default)?[^>]*>/g
+            while ((m = trackRegex.exec(videoBlock)) !== null) {
+                const trackSrc = m[1]
+                const lang = m[3] || m[2] || "unknown"
+                console.log("[AnimeWorld] _extractVideoSources: <track>", lang, trackSrc)
+                subtitles.push({
+                    id: lang,
+                    url: trackSrc.startsWith("http") ? trackSrc : `${this.base}${trackSrc.startsWith("/") ? "" : "/"}${trackSrc}`,
+                    language: lang,
+                    isDefault: m[4] !== undefined,
+                })
+            }
         }
 
-        console.log("[AnimeWorld] _extractVideoSources: returning", sources.length, "sources")
+        const scriptUrlRegex = /https?:\/\/[^"'\s<>]+\.(?:m3u8|mp4)[^"'\s<>]*/g
+        let m
+        while ((m = scriptUrlRegex.exec(html)) !== null) {
+            if (!sources.some((s) => s.url === m[0])) {
+                console.log("[AnimeWorld] _extractVideoSources: URL in HTML", m[0])
+                sources.push({ url: m[0], quality: "auto", type: m[0].includes(".m3u8") ? "m3u8" : "mp4", subtitles: [] })
+            }
+        }
+
+        if (sources.length > 0 && subtitles.length > 0) {
+            sources[0].subtitles = subtitles
+        }
+
+        if (sources.length === 0) {
+            console.warn("[AnimeWorld] _extractVideoSources: no sources found, returning player URL as unknown")
+            sources.push({ url: playerUrl, quality: "auto", type: "unknown", subtitles: [] })
+        }
+
         return sources
     }
 }
