@@ -9,6 +9,6 @@
   "language": "typescript",
   "lang": "it",
   "icon": "https://www.animeworld.ac/favicon.ico",
-  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/refs/heads/master/provider/it/animeworld/animeworld-provider.ts",
+  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/refs/heads/master/provider/it/animeworld/provider.ts",
   "isDevelopment": false
 }
