@@ -10,5 +10,5 @@
   "lang": "it",
   "icon": "https://www.animeworld.ac/favicon.ico",
   "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/refs/heads/master/animeworld-provider.ts",
-  "isDevelopment": true
+  "isDevelopment": false
 }
