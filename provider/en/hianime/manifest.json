@@ -3,12 +3,27 @@
   "name": "HiAnime",
   "description": "HiAnime.ms English anime streaming provider.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/hianime/manifest.json",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Trancezzz",
   "type": "onlinestream-provider",
   "language": "typescript",
   "lang": "en",
   "icon": "https://hianime.ms/templates/hianime/assets/images/favicon/favicon.ico",
   "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/hianime/provider.ts",
-  "isDevelopment": false
+  "isDevelopment": false,
+  "userConfig": {
+    "requiresConfig": false,
+    "version": 1,
+    "fields": [
+      {
+        "name": "domain",
+        "label": "Domain Selection",
+        "type": "select",
+        "default": "https://hianime.ms",
+        "options": [
+          { "label": "hianime.ms", "value": "https://hianime.ms" }
+        ]
+      }
+    ]
+  }
 }
