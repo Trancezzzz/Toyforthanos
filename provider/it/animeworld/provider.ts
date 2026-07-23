@@ -62,13 +62,37 @@ class Provider {
         return results
     }
 
+    _normalizeQuery(query: string): string {
+        let q = query
+        // Strip season descriptors: "4th Season", "2nd Season", "Season 4", etc.
+        q = q.replace(/\d+(?:st|nd|rd|th)\s+Season/gi, "")
+        q = q.replace(/Season\s+\d+/gi, "")
+        // Strip course/part: "Part 2", "Course 3"
+        q = q.replace(/(?:Part|Course)\s+\d+/gi, "")
+        // Strip English year/semester: "Second Year", "First Semester"
+        q = q.replace(/(?:First|Second|Third|Fourth|Fifth)\s+(?:Year|Semester|Course|Part|Season)/gi, "")
+        // Strip Japanese: "2-nensei-hen", "Ichi Gakki", "Ni Gakki"
+        q = q.replace(/\d+-nensei-hen/gi, "")
+        q = q.replace(/(?:Ichi|Ni|San|Yon|Go)\s+Gakki/gi, "")
+        // Strip standalone version numbers at the end: "4", "2", etc. when they're just a trailing number
+        q = q.replace(/\b\d+\s*$/, "")
+        // Clean up extra whitespace
+        q = q.replace(/\s+/g, " ").trim()
+        return q
+    }
+
     async search(opts: SearchOptions): Promise<SearchResult[]> {
         if (!opts.query.trim()) return []
         console.log("[AnimeWorld] search query:", opts.query)
 
         let keywords = opts.query.toLowerCase().split(/[\s,.-]+/).filter(function(w) { return w.length > 2 })
 
-        let res = await fetch(this._url("/search?keyword=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
+        // Try normalized query first (strips season/volume suffixes from AniList titles)
+        let normalized = this._normalizeQuery(opts.query)
+        let searchQuery = normalized.length > 0 ? normalized : opts.query
+        console.log("[AnimeWorld] normalized search query:", searchQuery)
+
+        let res = await fetch(this._url("/search?keyword=" + encodeURIComponent(searchQuery)), { headers: this._headers(this.base) })
         console.log("[AnimeWorld] search status:", res.status)
         let results: SearchResult[] = []
         if (res.ok) {
@@ -76,7 +100,17 @@ class Provider {
             results = await this._parseSearchPage(html, keywords)
         }
 
-        // If no results, try Latin-only words fallback (catches Romaji queries)
+        // If 0 results and query was normalized, try original query
+        if (results.length === 0 && normalized !== opts.query) {
+            console.log("[AnimeWorld] no results with normalized query, trying original")
+            let origRes = await fetch(this._url("/search?keyword=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
+            if (origRes.ok) {
+                let origHtml = await origRes.text()
+                results = await this._parseSearchPage(origHtml, keywords)
+            }
+        }
+
+        // If still no results, try Latin-only fallback
         if (results.length === 0) {
             let latinWords = opts.query.match(/[a-zA-Z]+/g)
             if (latinWords && latinWords.length > 0) {
