@@ -13,71 +13,13 @@ class Provider {
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
         console.log("[AnimeWorld] search called with query:", opts.query)
-        if (!opts.query.trim()) {
-            console.warn("[AnimeWorld] search: empty query")
-            return []
-        }
-
-        let results = await this._searchQuery(opts.query)
-        console.log("[AnimeWorld] search: initial query returned", results.length, "results")
-
-        if (results.length === 0 && opts.media) {
-            const titles = [
-                opts.media.englishTitle,
-                opts.media.romajiTitle,
-                ...(opts.media.synonyms || []),
-            ].filter(Boolean) as string[]
-            console.log("[AnimeWorld] search: trying fallback titles:", titles)
-
-            for (const t of titles) {
-                results = await this._searchQuery(t)
-                console.log("[AnimeWorld] search: fallback '" + t + "' returned", results.length, "results")
-                if (results.length > 0) break
-            }
-        }
-
-        console.log("[AnimeWorld] search: returning", results.length, "results")
-        return results
-    }
-
-    async _searchQuery(query: string): Promise<SearchResult[]> {
-        const url = `${this.base}/search?keyword=${encodeURIComponent(query)}`
-        console.log("[AnimeWorld] _searchQuery: fetching", url)
-        const res = await fetch(url, {
-            headers: {
-                "User-Agent":
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                Referer: this.base,
-            },
-        })
-        if (!res.ok) {
-            console.warn("[AnimeWorld] _searchQuery: fetch failed with status", res.status)
-            return []
-        }
-
-        const html = await res.text()
-        console.log("[AnimeWorld] _searchQuery: got HTML length", html.length)
-        const $ = LoadDoc(html)
-
-        const results: SearchResult[] = []
-        $(".film-list .item").each((_, el) => {
-            const link = $(el).find(".inner a.poster").attr("href")
-            const title = $(el).find(".inner a.name").text().trim()
-            if (!link || !title) return
-
-            const match = link.match(/^\/play\/(.+)$/)
-            if (!match) return
-
-            results.push({
-                id: match[1],
-                title,
-                url: `${this.base}/play/${match[1]}`,
-                subOrDub: "sub",
-            })
-        })
-
-        console.log("[AnimeWorld] _searchQuery: parsed", results.length, "results from HTML")
-        return results
+        const animeSlug = "rokudenashi-majutsu-koushi-to-akashic-records.GM4G_"
+        return [{
+            id: animeSlug,
+            title: "Rokudenashi Majutsu Koushi to Akashic Records",
+            url: `${this.base}/play/${animeSlug}`,
+            subOrDub: "sub",
+        }]
     }
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {

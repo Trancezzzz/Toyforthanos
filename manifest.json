@@ -7,7 +7,6 @@
   "author": "Trancezzz",
   "type": "onlinestream-provider",
   "language": "typescript",
-  "lang": "it",
   "icon": "https://www.animeworld.ac/favicon.ico",
   "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/refs/heads/master/animeworld-provider.ts",
   "isDevelopment": false
