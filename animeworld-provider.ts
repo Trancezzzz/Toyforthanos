@@ -36,50 +36,31 @@ class Provider {
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
         console.log("[AnimeWorld] findEpisodes:", id)
+
+        var res = await fetch(this.base + "/play/" + id, { headers: this._headers(this.base) })
+        if (!res.ok) throw new Error("findEpisodes failed " + res.status)
+        var html = await res.text()
+
         var allEpisodes: EpisodeDetails[] = []
-
-        for (var page = 1; page <= 10; page++) {
-            var pageUrl = this.base + "/play/" + id + (page === 1 ? "" : "?page=" + page)
-            console.log("[AnimeWorld] fetching episodes page", page, ":", pageUrl)
-
-            var res = await fetch(pageUrl, { headers: this._headers(this.base) })
-            if (!res.ok) break
-
-            var html = await res.text()
-            var parts = html.split('<li class="episode">')
-            var found = 0
-
-            for (var i = 1; i < parts.length; i++) {
-                var idM = parts[i].match(/data-id="([^"]+)"/)
-                var numM = parts[i].match(/data-episode-num="(\d+)"/)
-                var hrefM = parts[i].match(/href="([^"]+)"/)
-                if (idM && numM) {
-                    var num = parseInt(numM[1], 10)
-                    var epHref = hrefM ? hrefM[1] : ""
-                    if (!allEpisodes.some(function (e) { return e.number === num })) {
-                        allEpisodes.push({
-                            id: idM[1],
-                            number: num,
-                            url: epHref ? (epHref.indexOf("http") === 0 ? epHref : this.base + (epHref[0] === "/" ? "" : "/") + epHref) : this.base + "/play/" + id,
-                            title: "Episode " + num,
-                        })
-                        found++
-                    }
+        var epRx = /<li\s+class="episode"[^>]*>[\s\S]*?<\/li>/g
+        var m
+        while ((m = epRx.exec(html)) !== null) {
+            var block = m[0]
+            var idM = block.match(/data-id="([^"]+)"/)
+            var numM = block.match(/data-episode-num="(\d+)"/)
+            var hrefM = block.match(/href="([^"]+)"/)
+            if (idM && numM) {
+                var num = parseInt(numM[1], 10)
+                var epHref = hrefM ? hrefM[1] : ""
+                if (!allEpisodes.some(function (e) { return e.number === num })) {
+                    allEpisodes.push({
+                        id: idM[1],
+                        number: num,
+                        url: epHref ? (epHref.indexOf("http") === 0 ? epHref : this.base + (epHref[0] === "/" ? "" : "/") + epHref) : this.base + "/play/" + id,
+                        title: "Episode " + num,
+                    })
                 }
             }
-
-            console.log("[AnimeWorld] page", page, "found", found, "new episodes")
-
-            var paginationM = html.match(/page-item[^>]*>\s*<a[^>]*href="[^"]*\?page=(\d+)"/g)
-            var maxPage = page
-            if (paginationM) {
-                for (var pi = 0; pi < paginationM.length; pi++) {
-                    var pm = paginationM[pi].match(/\?page=(\d+)/)
-                    if (pm) { var np = parseInt(pm[1], 10); if (np > maxPage) maxPage = np }
-                }
-            }
-
-            if (found === 0 || page >= maxPage) break
         }
 
         if (allEpisodes.length === 0) throw new Error("No episodes found.")
