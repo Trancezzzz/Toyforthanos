@@ -141,64 +141,65 @@ class Provider {
             }
         }
         let res = await fetch(this.api + "/shows/episode/" + episodeId + "/links", opts)
-        if (!res.ok) return null
+        if (!res.ok) {
+            let text = await res.text()
+            console.log("[Kartoons] _fetchLinks status:", res.status, "body:", text.substring(0, 150))
+            return null
+        }
         return res.json()
     }
 
-    async _solveTurnstile(): Promise<string> {
+    async _solveTurnstile(playerUrl: string): Promise<string> {
         let cached = $store.get("kartoons_ts_token")
         if (cached) {
             console.log("[Kartoons] using cached Turnstile token")
             return cached
         }
 
-        console.log("[Kartoons] launching ChromeDP for Turnstile solve")
+        console.log("[Kartoons] launching ChromeDP for Turnstile solve at:", playerUrl)
         let browser = await ChromeDP.newBrowser({ headless: false, timeout: 120 })
         try {
-            await browser.navigate(this.site)
-            await browser.sleep(3000)
+            await browser.navigate(playerUrl)
+            console.log("[Kartoons] waiting for React SPA + Turnstile to render...")
+            await browser.sleep(10000)
 
-            console.log("[Kartoons] injecting Turnstile widget")
             let token = await browser.evaluate(
                 `(function() {
                     return new Promise(function(resolve) {
-                        let p = document.createElement('div');
-                        p.id = 'k-ts';
-                        p.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#1a1a2e;padding:24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-family:sans-serif;';
-                        document.body.appendChild(p);
+                        var deadline = Date.now() + 60000;
 
-                        let l = document.createElement('p');
-                        l.textContent = 'Kartoons needs a security check. Complete the CAPTCHA.';
-                        l.style.cssText = 'color:#e0e0e0;margin:0 0 16px 0;font-size:14px;text-align:center;';
-                        p.appendChild(l);
+                        function tryClick() {
+                            var el = document.querySelector('[name="cf-turnstile-response"]');
+                            if (el && el.value) { resolve(el.value); return; }
 
-                        let w = document.createElement('div');
-                        w.id = 'k-ts-widget';
-                        p.appendChild(w);
+                            var frames = document.querySelectorAll('iframe');
+                            for (var i = 0; i < frames.length; i++) {
+                                var r = frames[i].getBoundingClientRect();
+                                if (r.width > 200 && r.width < 350 && r.height > 40 && r.height < 100) {
+                                    var x = r.left + 30;
+                                    var y = r.top + r.height / 2;
+                                    var target = document.elementFromPoint(x, y);
+                                    if (target) {
+                                        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+                                        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+                                        target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+                                        console.log('[Kartoons] clicked Turnstile iframe');
+                                    }
+                                    break;
+                                }
+                            }
 
-                        let done = function(t) {
-                            resolve(t);
-                            setTimeout(function() { p.remove(); }, 500);
-                        };
-
-                        if (typeof turnstile !== 'undefined') {
-                            turnstile.render('#k-ts-widget', {
-                                sitekey: '` + this.sitekey + `',
-                                callback: done
-                            });
-                        } else {
-                            window.initKartoons = function() {
-                                turnstile.render('#k-ts-widget', {
-                                    sitekey: '` + this.sitekey + `',
-                                    callback: done
-                                });
-                            };
-                            let s = document.createElement('script');
-                            s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=initKartoons';
-                            s.async = true;
-                            s.defer = true;
-                            document.head.appendChild(s);
+                            var pollDeadline = Date.now() + 35000;
+                            function poll() {
+                                var el2 = document.querySelector('[name="cf-turnstile-response"]');
+                                if (el2 && el2.value) { resolve(el2.value); return; }
+                                if (Date.now() > pollDeadline) { resolve(''); return; }
+                                setTimeout(poll, 500);
+                            }
+                            setTimeout(poll, 3000);
                         }
+
+                        setTimeout(tryClick, 3000);
                     });
                 })()`
             )
@@ -210,6 +211,7 @@ class Provider {
                 setTimeout(function() { $store.set("kartoons_ts_token", "") }, 120000)
                 return token
             }
+            console.log("[Kartoons] Turnstile solve returned empty token")
         } catch (e) {
             console.log("[Kartoons] Turnstile solver error:", e)
             try { await browser.close() } catch (_) {}
@@ -249,8 +251,8 @@ class Provider {
             return this._buildEpisodeServer(data.data)
         }
 
-        console.log("[Kartoons] direct fetch blocked, solving Turnstile...")
-        let token = await this._solveTurnstile()
+        console.log("[Kartoons] direct fetch blocked, solving Turnstile via player page...")
+        let token = await this._solveTurnstile(episode.url)
         if (token) {
             console.log("[Kartoons] retrying with Turnstile token")
             data = await this._fetchLinks(episode.id, token)
