@@ -17,14 +17,12 @@ class Provider {
         try { return atob(r) } catch (e) { return "" }
     }
 
-    _buildBackupUrl(token: string, version: string, epNum: number): string {
-        let v = version || "sub"
-        if (token) {
-            let decoded = this._b64decode(token)
-            let epId = decoded.split(":")[0]
-            if (epId) return "https://megaplay.buzz/stream/s-2/" + epId + "/" + v
-        }
-        return ""
+    _parseVersion(server: string): string {
+        return server.toLowerCase().indexOf("dub") !== -1 ? "dub" : "sub"
+    }
+
+    _parseServerName(server: string): string {
+        return server.split(" ")[0].toLowerCase()
     }
 
     _extractSlug(id: string): { name: string, animeId: string } {
@@ -33,8 +31,40 @@ class Provider {
         return { name: id.substring(0, lastDash), animeId: id.substring(lastDash + 1) }
     }
 
+    _buildRyuUrl(token: string, version: string): string {
+        if (!token) return ""
+        let decoded = this._b64decode(token)
+        let epId = decoded.split(":")[0]
+        if (!epId) return ""
+        return "https://megaplay.buzz/stream/s-2/" + epId + "/" + version
+    }
+
+    _buildDirectUrl(baseUrl: string, anilistId: string, epNum: number, version: string): string {
+        return baseUrl + anilistId + "/" + epNum + "/" + version
+    }
+
+    async _scrapeWatchPage(episodeUrl: string): Promise<{ anilistId: string, malId: string }> {
+        let res = await fetch(episodeUrl, { headers: this._headers(this.base) })
+        if (!res.ok) return { anilistId: "", malId: "" }
+        let html = await res.text()
+        let aniM = html.match(/var anilistId\s*=\s*(\d+)/)
+        let malM = html.match(/var malId\s*=\s*(\d+)/)
+        return {
+            anilistId: aniM ? aniM[1] : "",
+            malId: malM ? malM[1] : "",
+        }
+    }
+
     getSettings(): Settings {
-        return { episodeServers: ["HiAnime"], supportsDub: true }
+        return {
+            episodeServers: [
+                "Ryu Sub", "Ryu Dub",
+                "Volt Sub", "Volt Dub",
+                "Warp Sub", "Warp Dub",
+                "Ayame Sub", "Ayame Dub",
+            ],
+            supportsDub: true,
+        }
     }
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
@@ -98,15 +128,31 @@ class Provider {
         return episodes
     }
 
-    async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
-        let subOrDub = "sub"
-        let backupUrl = this._buildBackupUrl(episode.id, subOrDub, episode.number)
+    async findEpisodeServer(episode: EpisodeDetails, server: string): Promise<EpisodeServer> {
+        let version = this._parseVersion(server)
+        let serverName = this._parseServerName(server)
+        let url = ""
 
-        if (!backupUrl) throw new Error("No player URL could be built")
+        if (serverName === "ryu") {
+            url = this._buildRyuUrl(episode.id, version)
+        } else {
+            let ids = await this._scrapeWatchPage(episode.url)
+            if (!ids.anilistId) throw new Error("Could not scrape anilistId")
+
+            if (serverName === "volt") {
+                url = this._buildDirectUrl("https://vidnest.fun/anime/", ids.anilistId, episode.number, version)
+            } else if (serverName === "warp") {
+                url = this._buildDirectUrl("https://tryembed.us.cc/embed/anime/", ids.anilistId, episode.number, version)
+            } else if (serverName === "ayame") {
+                url = this._buildDirectUrl("https://vidnest.fun/animepahe/", ids.anilistId, episode.number, version)
+            }
+        }
+
+        if (!url) throw new Error("No player URL could be built for " + server)
 
         let playerHeaders = this._headers(episode.url)
         try {
-            let res = await fetch(backupUrl, { headers: playerHeaders })
+            let res = await fetch(url, { headers: playerHeaders })
             if (res.ok) {
                 let text = await res.text()
                 let sources: VideoSource[] = []
@@ -119,11 +165,11 @@ class Provider {
                     }
                 }
                 if (sources.length > 0) {
-                    return { server: "HiAnime", headers: playerHeaders, videoSources: sources }
+                    return { server: server, headers: playerHeaders, videoSources: sources }
                 }
             }
         } catch (e) { }
 
-        return { server: "HiAnime", headers: playerHeaders, videoSources: [{ url: backupUrl, quality: "auto", type: "unknown", subtitles: [] }] }
+        return { server: server, headers: playerHeaders, videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
     }
 }
