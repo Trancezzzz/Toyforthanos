@@ -37,6 +37,15 @@ class Provider {
         let results: SearchResult[] = []
         let parts = html.split('<div class="item">')
         console.log("[AnimeWorld] search found", parts.length - 1, "item blocks")
+
+        // Sort keywords by length descending, keep top half (most specific/longest words)
+        let strongKw: string[] = []
+        if (keywords.length > 0) {
+            let sorted = keywords.sort(function(a, b) { return b.length - a.length })
+            strongKw = sorted.slice(0, Math.max(1, Math.floor(sorted.length / 2)))
+            console.log("[AnimeWorld] strong keywords:", JSON.stringify(strongKw))
+        }
+
         for (let i = 1; i < parts.length; i++) {
             let linkM = parts[i].match(/href="\/play\/([^"]+)"/)
             let titleM = parts[i].match(/class="name"[^>]*>([^<]+)</)
@@ -44,11 +53,11 @@ class Provider {
             if (linkM && titleM) {
                 let title = titleM[1]
                 let jtitle = jtitleM ? jtitleM[1].toLowerCase() : ""
-                if (keywords.length === 0) {
+                if (strongKw.length === 0) {
                     results.push({ id: linkM[1], title: title, url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
                 } else {
                     let titleLower = title.toLowerCase()
-                    let matches = keywords.some(function(k) { return titleLower.indexOf(k) !== -1 || jtitle.indexOf(k) !== -1 })
+                    let matches = strongKw.some(function(k) { return titleLower.indexOf(k) !== -1 || jtitle.indexOf(k) !== -1 })
                     if (matches) {
                         results.push({ id: linkM[1], title: title, url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
                     } else {
@@ -107,6 +116,20 @@ class Provider {
             if (origRes.ok) {
                 let origHtml = await origRes.text()
                 results = await this._parseSearchPage(origHtml, keywords)
+            }
+        }
+
+        // Progressive shortening: AnimeWorld's search fails on multi-word phrases.
+        // Try the longest keyword as a standalone search.
+        if (results.length === 0) {
+            let longest = keywords.sort(function(a, b) { return b.length - a.length })[0]
+            if (longest && longest.length > 3) {
+                console.log("[AnimeWorld] fallback short search:", longest)
+                let shortRes = await fetch(this._url("/search?keyword=" + encodeURIComponent(longest)), { headers: this._headers(this.base) })
+                if (shortRes.ok) {
+                    let shortHtml = await shortRes.text()
+                    results = await this._parseSearchPage(shortHtml, keywords)
+                }
             }
         }
 
