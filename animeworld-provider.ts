@@ -8,16 +8,30 @@ class Provider {
         return { "User-Agent": this.UA, Referer: referer }
     }
 
+    _url(path: string) {
+        return this.base + path
+    }
+
+    _sourceType(url: string) {
+        return url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4"
+    }
+
+    async _tryPlayer(episodeId: string, server: string, referer: string) {
+        var url = this._url("/api/episode/serverPlayer" + server + "?id=" + episodeId)
+        var res = await fetch(url, { headers: this._headers(referer) })
+        if (!res.ok) return ""
+        var text = await res.text()
+        if (text.indexOf("<source") !== -1 || text.indexOf("https://") !== -1) return url
+        return ""
+    }
+
     getSettings(): Settings {
-        return {
-            episodeServers: ["AnimeWorld"],
-            supportsDub: false,
-        }
+        return { episodeServers: ["AnimeWorld"], supportsDub: false }
     }
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
         if (!opts.query.trim()) return []
-        var res = await fetch(this.base + "/search?keyword=" + encodeURIComponent(opts.query), { headers: this._headers(this.base) })
+        var res = await fetch(this._url("/search?keyword=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
         if (!res.ok) return []
         var html = await res.text()
         var results: SearchResult[] = []
@@ -25,17 +39,16 @@ class Provider {
         for (var i = 1; i < parts.length; i++) {
             var linkM = parts[i].match(/href="\/play\/([^"]+)"/)
             var titleM = parts[i].match(/class="name"[^>]*>([^<]+)</)
-            if (linkM && titleM) results.push({ id: linkM[1], title: titleM[1], url: this.base + "/play/" + linkM[1], subOrDub: "sub" })
+            if (linkM && titleM) results.push({ id: linkM[1], title: titleM[1], url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
         }
         return results
     }
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
-        var res = await fetch(this.base + "/play/" + id, { headers: this._headers(this.base) })
+        var res = await fetch(this._url("/play/" + id), { headers: this._headers(this.base) })
         if (!res.ok) throw new Error("findEpisodes failed " + res.status)
         var html = await res.text()
-
-        var allEpisodes: EpisodeDetails[] = []
+        var episodes: EpisodeDetails[] = []
         var epRx = /<li\s+class="episode"[^>]*>[\s\S]*?<\/li>/g
         var m
         while ((m = epRx.exec(html)) !== null) {
@@ -45,56 +58,28 @@ class Provider {
             var hrefM = block.match(/href="([^"]+)"/)
             if (idM && numM) {
                 var num = parseInt(numM[1], 10)
-                var epHref = hrefM ? hrefM[1] : ""
-                if (!allEpisodes.some(function (e) { return e.number === num })) {
-                    allEpisodes.push({
+                if (!episodes.some(function (e) { return e.number === num })) {
+                    episodes.push({
                         id: idM[1],
                         number: num,
-                        url: epHref ? (epHref.indexOf("http") === 0 ? epHref : this.base + (epHref[0] === "/" ? "" : "/") + epHref) : this.base + "/play/" + id,
+                        url: hrefM ? this._url(hrefM[1]) : this._url("/play/" + id),
                         title: "Episode " + num,
                     })
                 }
             }
         }
-
-        if (allEpisodes.length === 0) throw new Error("No episodes found.")
-        allEpisodes.sort(function (a, b) { return a.number - b.number })
-        return allEpisodes
+        if (episodes.length === 0) throw new Error("No episodes found.")
+        episodes.sort(function (a, b) { return a.number - b.number })
+        return episodes
     }
 
     async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
-        var playerUrl = this.base + "/api/episode/serverPlayerAnimeWorld?id=" + episode.id
-
-        var prRes = await fetch(playerUrl, { headers: this._headers(episode.url) })
-        if (prRes.ok) {
-            var prText = await prRes.text()
-            if (prText.indexOf("<source") === -1 && prText.indexOf("https://") === -1) playerUrl = ""
-        } else {
-            playerUrl = ""
+        var servers = ["AnimeWorld", "Shiva", ""]
+        var playerUrl = ""
+        for (var si = 0; si < servers.length; si++) {
+            playerUrl = await this._tryPlayer(episode.id, servers[si], episode.url)
+            if (playerUrl) break
         }
-
-        if (!playerUrl) {
-            playerUrl = this.base + "/api/episode/serverPlayerShiva?id=" + episode.id
-            var prRes = await fetch(playerUrl, { headers: this._headers(episode.url) })
-            if (prRes.ok) {
-                var prText = await prRes.text()
-                if (prText.indexOf("<source") === -1 && prText.indexOf("https://") === -1) playerUrl = ""
-            } else {
-                playerUrl = ""
-            }
-        }
-
-        if (!playerUrl) {
-            playerUrl = this.base + "/api/episode/serverPlayer?id=" + episode.id
-            var prRes = await fetch(playerUrl, { headers: this._headers(episode.url) })
-            if (prRes.ok) {
-                var prText = await prRes.text()
-                if (prText.indexOf("<source") === -1 && prText.indexOf("https://") === -1) playerUrl = ""
-            } else {
-                playerUrl = ""
-            }
-        }
-
         if (!playerUrl) throw new Error("No player URL found")
 
         var plRes = await fetch(playerUrl, { headers: this._headers(episode.url) })
@@ -105,10 +90,10 @@ class Provider {
         var plHtml = await plRes.text()
         var sources: VideoSource[] = []
         var srcParts = plHtml.split("<source")
-        for (var si = 1; si < srcParts.length; si++) {
-            var m = srcParts[si].match(/src="([^"]+)"/)
-            if (m && !sources.some(function (x) { return x.url === m[1] })) {
-                sources.push({ url: m[1], quality: "auto", type: m[1].indexOf(".m3u8") !== -1 ? "m3u8" : "mp4", subtitles: [] })
+        for (var s = 1; s < srcParts.length; s++) {
+            var sm = srcParts[s].match(/src="([^"]+)"/)
+            if (sm && !sources.some(function (x) { return x.url === sm[1] })) {
+                sources.push({ url: sm[1], quality: "auto", type: this._sourceType(sm[1]), subtitles: [] })
             }
         }
 
