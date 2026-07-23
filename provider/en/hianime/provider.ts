@@ -42,8 +42,25 @@ class Provider {
         return m ? m[1] : ""
     }
 
+    _versionFromServer(server: string): string {
+        let s = server.toLowerCase()
+        if (s.indexOf("dub") !== -1) return "dub"
+        return "sub"
+    }
+
+    _serverKey(server: string): string {
+        let s = server.toLowerCase()
+        if (s.indexOf("volt") !== -1) return "volt"
+        if (s.indexOf("warp") !== -1) return "warp"
+        if (s.indexOf("ayame") !== -1) return "ayame"
+        return "ryu"
+    }
+
     getSettings(): Settings {
-        return { episodeServers: ["Ryu", "Volt", "Warp", "Ayame"], supportsDub: true }
+        return {
+            episodeServers: ["Ryu Sub", "Ryu Dub", "Volt Sub", "Volt Dub", "Warp Sub", "Warp Dub", "Ayame Sub", "Ayame Dub"],
+            supportsDub: true,
+        }
     }
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
@@ -118,29 +135,29 @@ class Provider {
 
     async findEpisodeServer(episode: EpisodeDetails, server: string): Promise<EpisodeServer> {
         console.log("[HiAnime] findEpisodeServer ep:", episode.number, "server:", server)
+        let version = this._versionFromServer(server)
+        let key = this._serverKey(server)
         let url = ""
 
-        let sn = server.toLowerCase()
-        if (sn.indexOf("volt") !== -1) {
+        if (key === "volt") {
             let anilistId = await this._scrapeAnilistId(episode.url)
-            if (anilistId) url = "https://vidnest.fun/anime/" + anilistId + "/" + episode.number + "/sub"
-        } else if (sn.indexOf("warp") !== -1) {
+            if (anilistId) url = "https://vidnest.fun/anime/" + anilistId + "/" + episode.number + "/" + version
+        } else if (key === "warp") {
             let anilistId = await this._scrapeAnilistId(episode.url)
-            if (anilistId) url = "https://tryembed.us.cc/embed/anime/" + anilistId + "/" + episode.number + "/sub"
-        } else if (sn.indexOf("ayame") !== -1) {
+            if (anilistId) url = "https://tryembed.us.cc/embed/anime/" + anilistId + "/" + episode.number + "/" + version
+        } else if (key === "ayame") {
             let anilistId = await this._scrapeAnilistId(episode.url)
-            if (anilistId) url = "https://vidnest.fun/animepahe/" + anilistId + "/" + episode.number + "/sub"
+            if (anilistId) url = "https://vidnest.fun/animepahe/" + anilistId + "/" + episode.number + "/" + version
         }
 
-        // Default to Ryu (backup) for anything unknown — never throw
         if (!url) {
             let epId = this._episodeIdFromToken(episode.id)
-            if (epId) url = "https://megaplay.buzz/stream/s-2/" + epId + "/sub"
+            if (epId) url = "https://megaplay.buzz/stream/s-2/" + epId + "/" + version
         }
 
         if (!url) {
             console.log("[HiAnime] fallback: returning episode URL")
-            return { server: "Ryu", headers: this._headers(episode.url), videoSources: [{ url: episode.url, quality: "auto", type: "unknown", subtitles: [] }] }
+            return { server: server, headers: this._headers(episode.url), videoSources: [{ url: episode.url, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
         console.log("[HiAnime] player URL:", url.substring(0, 70) + "...")
