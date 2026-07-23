@@ -13,13 +13,47 @@ class Provider {
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
         console.log("[AnimeWorld] search called with query:", opts.query)
-        const animeSlug = "rokudenashi-majutsu-koushi-to-akashic-records.GM4G_"
-        return [{
-            id: animeSlug,
-            title: "Rokudenashi Majutsu Koushi to Akashic Records",
-            url: `${this.base}/play/${animeSlug}`,
-            subOrDub: "sub",
-        }]
+        if (!opts.query.trim()) {
+            console.warn("[AnimeWorld] search: empty query")
+            return []
+        }
+
+        const url = `${this.base}/search?keyword=${encodeURIComponent(opts.query)}`
+        console.log("[AnimeWorld] search: fetching", url)
+        const res = await fetch(url, {
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                Referer: this.base,
+            },
+        })
+        if (!res.ok) {
+            console.warn("[AnimeWorld] search: fetch failed with status", res.status)
+            return []
+        }
+
+        const html = await res.text()
+        console.log("[AnimeWorld] search: got HTML length", html.length)
+        const $ = LoadDoc(html)
+
+        const results: SearchResult[] = []
+        $(".film-list .item").each((_, el) => {
+            const link = $(el).find(".inner a.poster").attr("href")
+            const title = $(el).find(".inner a.name").text().trim()
+            if (!link || !title) return
+
+            const match = link.match(/^\/play\/(.+)$/)
+            if (!match) return
+
+            results.push({
+                id: match[1],
+                title,
+                url: `${this.base}/play/${match[1]}`,
+                subOrDub: "sub",
+            })
+        })
+
+        console.log("[AnimeWorld] search: returning", results.length, "results")
+        return results
     }
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
