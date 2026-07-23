@@ -1,7 +1,9 @@
 /// <reference path="./online-streaming-provider.d.ts" />
 
+console.log("[HiAnime] PROVIDER LOADED v1.0.3-shiva")
+
 class Provider {
-    base = "{{domain}}"
+    base = "https://hianime.ms"
     UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     _headers(referer: string) {
@@ -58,7 +60,7 @@ class Provider {
 
     getSettings(): Settings {
         return {
-            episodeServers: ["Ryu Sub", "Ryu Dub", "Volt Sub", "Volt Dub", "Warp Sub", "Warp Dub", "Ayame Sub", "Ayame Dub"],
+            episodeServers: ["Shiva", "Ryu Sub", "Ryu Dub", "Volt Sub", "Volt Dub", "Warp Sub", "Warp Dub", "Ayame Sub", "Ayame Dub"],
             supportsDub: true,
         }
     }
