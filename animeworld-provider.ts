@@ -66,80 +66,105 @@ class Provider {
     async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
         console.log("[AnimeWorld] findEpisodeServer id:", episode.id, "num:", episode.number)
 
-        const res = await fetch(episode.url, { headers: this._headers(this.base) })
-        if (!res.ok) throw new Error("page fetch failed " + res.status)
-        const html = await res.text()
-        console.log("[AnimeWorld] page HTML length:", html.length)
+        var epRes = await fetch(episode.url, { headers: this._headers(this.base) })
+        if (!epRes.ok) throw new Error("page fetch failed " + epRes.status)
+        var epHtml = await epRes.text()
 
-        var iframeSrc = ""
-        var iframeM = html.match(/<iframe[^>]*?src="([^"]+)"[^>]*?id="player-iframe"/)
-            || html.match(/<iframe[^>]*?id="player-iframe"[^>]*?src="([^"]+)"/)
-            || html.match(/player-iframe[^>]*?src="([^"]+)"/)
-            || html.match(/iframe.*?src="([^"]*serverPlayer[^"]+)"/)
-        if (iframeM) {
-            iframeSrc = iframeM[1]
-            if (iframeSrc.indexOf("http") !== 0) iframeSrc = this.base + (iframeSrc[0] === "/" ? "" : "/") + iframeSrc
-            console.log("[AnimeWorld] player iframe:", iframeSrc)
-        }
+        var csrfToken = (epHtml.match(/window\.csrfToken\s*=\s*['"]([^'"]+)['"]/) || epHtml.match(/csrf-token[^>]+content="([^"]+)/) || [])[1] || ""
 
-        var csrfToken = ""
-        var csrfM = html.match(/window\.csrfToken\s*=\s*['"]([^'"]+)['"]/) || html.match(/csrf-token[^>]+content="([^"]+)"/)
-        if (csrfM) {
-            csrfToken = csrfM[1]
-            console.log("[AnimeWorld] CSRF:", csrfToken.substring(0, 10) + "...")
-        }
+        var playerUrl = ""
 
-        var playerUrl = iframeSrc
-        if (!playerUrl && csrfToken) {
-            console.log("[AnimeWorld] no iframe found, trying API")
-            var cookies = ""
+        var playerEndpoints = [
+            this.base + "/api/episode/serverPlayerAnimeWorld?id=" + episode.id,
+            this.base + "/api/episode/serverPlayerShiva?id=" + episode.id,
+            this.base + "/api/episode/serverPlayer?id=" + episode.id,
+        ]
+
+        for (var pi = 0; pi < playerEndpoints.length; pi++) {
             try {
-                var h = res.headers
-                if (h) {
-                    var raw = h.get("Set-Cookie") || h.get("set-cookie") || ""
-                    var cparts = raw.split(",")
-                    for (var ci = 0; ci < cparts.length; ci++) {
-                        var cv = cparts[ci].split(";")[0].trim()
-                        if (cv.length > 0) { if (cookies.length > 0) cookies += "; "; cookies += cv }
+                console.log("[AnimeWorld] trying direct player URL:", playerEndpoints[pi])
+                var prRes = await fetch(playerEndpoints[pi], { headers: this._headers(episode.url) })
+                if (prRes.ok) {
+                    var prText = await prRes.text()
+                    console.log("[AnimeWorld] direct response length:", prText.length, "preview:", prText.substring(0, 200))
+                    if (prText.indexOf("<source") !== -1 || prText.indexOf("https://") !== -1) {
+                        playerUrl = playerEndpoints[pi]
+                        console.log("[AnimeWorld] direct player URL works:", playerUrl)
+                        break
+                    }
+                    if (prText.indexOf('"target"') !== -1 || prText.indexOf("target") !== -1) {
+                        try {
+                            var pd = JSON.parse(prText)
+                            if (pd.target) {
+                                playerUrl = pd.target
+                                console.log("[AnimeWorld] got target from direct:", playerUrl.substring(0, 80))
+                                break
+                            }
+                        } catch (e) {}
                     }
                 }
-            } catch (e) {}
-            var hdrs = {
-                "CSRF-Token": csrfToken, "Content-Type": "application/json",
-                "User-Agent": this.UA, Referer: episode.url,
-                "X-Requested-With": "XMLHttpRequest", Origin: this.base,
-            }
-            if (cookies.length > 0) hdrs["Cookie"] = cookies
+            } catch (e) { console.log("[AnimeWorld] direct failed:", e) }
+        }
+
+        if (!playerUrl && csrfToken) {
+            console.log("[AnimeWorld] trying API with CSRF token")
             try {
+                var h = epRes.headers
+                var cookieStr = ""
+                try {
+                    if (h) {
+                        var keys = Object.keys(h)
+                        console.log("[AnimeWorld] headers keys:", JSON.stringify(keys))
+                        for (var ki = 0; ki < keys.length; ki++) {
+                            console.log("[AnimeWorld] header", keys[ki], "=", String(h[keys[ki]]).substring(0, 60))
+                            if (keys[ki].toLowerCase() === "set-cookie") {
+                                var raw = String(h[keys[ki]])
+                                var cparts = raw.split(",")
+                                for (var ci = 0; ci < cparts.length; ci++) {
+                                    var cv = cparts[ci].split(";")[0].trim()
+                                    if (cv.length > 0) { if (cookieStr.length > 0) cookieStr += "; "; cookieStr += cv }
+                                }
+                            }
+                        }
+                    }
+                } catch (e2) { console.log("[AnimeWorld] header iteration error:", e2) }
+
+                var apiBody = JSON.stringify({ id: episode.id, alt: "0" })
+                console.log("[AnimeWorld] API body:", apiBody)
+
                 var apiRes = await fetch(this.base + "/api/episode/info", {
-                    method: "POST", headers: hdrs,
-                    body: JSON.stringify({ id: episode.id, alt: "0" }),
+                    method: "POST",
+                    headers: {
+                        "CSRF-Token": csrfToken, "Content-Type": "application/json",
+                        "User-Agent": this.UA, Referer: episode.url,
+                        "X-Requested-With": "XMLHttpRequest", Origin: this.base,
+                    },
+                    body: apiBody,
                 })
                 if (apiRes.ok) {
-                    var apiData = JSON.parse(await apiRes.text())
-                    playerUrl = apiData.target || ""
-                    console.log("[AnimeWorld] API target:", playerUrl.substring(0, 80))
+                    var apiText = await apiRes.text()
+                    console.log("[AnimeWorld] API response:", apiText.substring(0, 200))
+                    var apiData = JSON.parse(apiText)
+                    if (apiData.target) playerUrl = apiData.target
+                } else {
+                    console.log("[AnimeWorld] API status:", apiRes.status)
                 }
-            } catch (e) { console.log("[AnimeWorld] API failed:", e) }
+            } catch (e) { console.log("[AnimeWorld] API error:", e) }
         }
 
         if (!playerUrl) throw new Error("No player URL found")
 
         console.log("[AnimeWorld] fetching player:", playerUrl.substring(0, 80))
-        const playerRes = await fetch(playerUrl, { headers: this._headers(episode.url) })
-        if (!playerRes.ok) {
-            return {
-                server: "AnimeWorld",
-                headers: this._headers(playerUrl),
-                videoSources: [{ url: playerUrl, quality: "auto", type: "unknown", subtitles: [] }],
-            }
+        var plRes = await fetch(playerUrl, { headers: this._headers(episode.url) })
+        if (!plRes.ok) {
+            return { server: "AnimeWorld", headers: this._headers(playerUrl), videoSources: [{ url: playerUrl, quality: "auto", type: "unknown", subtitles: [] }] }
         }
-        const playerHtml = await playerRes.text()
-        console.log("[AnimeWorld] player HTML:", playerHtml.length, "bytes")
-        console.log("[AnimeWorld] player HTML preview:", playerHtml.substring(0, 600))
+
+        var plHtml = await plRes.text()
+        console.log("[AnimeWorld] player HTML:", plHtml.length, "bytes, preview:", plHtml.substring(0, 600))
 
         var sources: VideoSource[] = []
-        var srcParts = playerHtml.split("<source")
+        var srcParts = plHtml.split("<source")
         for (var si = 1; si < srcParts.length; si++) {
             var m = srcParts[si].match(/src="([^"]+)"/)
             if (m && !sources.some(function (x) { return x.url === m[1] })) {
@@ -149,11 +174,11 @@ class Provider {
 
         var idx = 0
         while (true) {
-            idx = playerHtml.indexOf("https://", idx)
+            idx = plHtml.indexOf("https://", idx)
             if (idx === -1) break
             var end = idx + 8
-            while (end < playerHtml.length && playerHtml[end] !== '"' && playerHtml[end] !== "'" && playerHtml[end] !== " " && playerHtml[end] !== ">" && playerHtml[end] !== "\n" && playerHtml[end] !== "\r" && playerHtml[end] !== "\t") end++
-            var url = playerHtml.substring(idx, end)
+            while (end < plHtml.length && plHtml[end] !== '"' && plHtml[end] !== "'" && plHtml[end] !== " " && plHtml[end] !== ">" && plHtml[end] !== "\n" && plHtml[end] !== "\r" && plHtml[end] !== "\t") end++
+            var url = plHtml.substring(idx, end)
             if ((url.indexOf(".mp4") !== -1 || url.indexOf(".m3u8") !== -1) && !sources.some(function (x) { return x.url === url })) {
                 sources.push({ url: url, quality: "auto", type: url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4", subtitles: [] })
             }
