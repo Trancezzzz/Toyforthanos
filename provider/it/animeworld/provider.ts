@@ -153,6 +153,12 @@ class Provider {
     }
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
+        // Manual match: if id is a full URL, extract the slug
+        if (id.indexOf("http") === 0) {
+            let m = id.match(/\/play\/([^\/?#]+)/)
+            if (m) id = m[1]
+            console.log("[AnimeWorld] manual match, extracted slug:", id)
+        }
         console.log("[AnimeWorld] findEpisodes id:", id)
         let res = await fetch(this._url("/play/" + id), { headers: this._headers(this.base) })
         console.log("[AnimeWorld] episode page status:", res.status)

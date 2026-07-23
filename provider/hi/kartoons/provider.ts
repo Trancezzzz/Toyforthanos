@@ -68,6 +68,23 @@ class Provider {
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
         let episodes: EpisodeDetails[] = []
         let epNum = 1
+
+        // Manual match: if id is a full URL, extract slug and resolve via search
+        if (id.indexOf("http") === 0) {
+            let slugM = id.match(/kartoons\.me\/(?:show|movie)\/([^\/?#]+)/)
+            if (slugM) {
+                let slug = slugM[1]
+                console.log("[Kartoons] manual match, resolving slug:", slug)
+                let searchRes = await fetch(this.api + "/shows?search=" + encodeURIComponent(slug.replace(/[-/]/g, " ")) + "&limit=5")
+                if (searchRes.ok) {
+                    let body = searchRes.json()
+                    if (body.success && body.data && body.data.length > 0) {
+                        id = body.data[0]._id
+                        console.log("[Kartoons] resolved to id:", id)
+                    }
+                }
+            }
+        }
         console.log("[Kartoons] findEpisodes id:", id)
 
         let showRes = await fetch(this.api + "/shows/" + id)
