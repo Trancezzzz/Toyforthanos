@@ -2,13 +2,13 @@
   "id": "animeworld",
   "name": "AnimeWorld",
   "description": "AnimeWorld.ac Italian anime streaming provider. Supports multi-server episode sources with CSRF-based API authentication.",
-  "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/manifest.json",
+  "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/refs/heads/master/manifest.json",
   "version": "1.0.0",
   "author": "Trancezzz",
   "type": "onlinestream-provider",
   "language": "typescript",
   "lang": "it",
   "icon": "https://www.animeworld.ac/favicon.ico",
-  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/animeworld-provider.ts",
+  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/refs/heads/master/animeworld-provider.ts",
   "isDevelopment": true
 }
