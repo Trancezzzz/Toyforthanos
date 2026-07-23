@@ -18,10 +18,14 @@ class Provider {
 
     async _tryPlayer(episodeId: string, server: string, referer: string) {
         let url = this._url("/api/episode/serverPlayer" + server + "?id=" + episodeId)
+        console.log("[AnimeWorld] _tryPlayer server:", server, "url:", url)
         let res = await fetch(url, { headers: this._headers(referer) })
+        console.log("[AnimeWorld] _tryPlayer status:", res.status, "for server:", server)
         if (!res.ok) return ""
         let text = await res.text()
+        console.log("[AnimeWorld] _tryPlayer response length:", text.length, "has source:", text.indexOf("<source"))
         if (text.indexOf("<source") !== -1 || text.indexOf("https://") !== -1) return url
+        console.log("[AnimeWorld] _tryPlayer server", server, "failed - no source/url in response")
         return ""
     }
 
@@ -31,27 +35,41 @@ class Provider {
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
         if (!opts.query.trim()) return []
+        console.log("[AnimeWorld] search query:", opts.query)
         let res = await fetch(this._url("/search?keyword=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
+        console.log("[AnimeWorld] search status:", res.status)
         if (!res.ok) return []
         let html = await res.text()
+        console.log("[AnimeWorld] search HTML length:", html.length)
         let results: SearchResult[] = []
         let parts = html.split('<div class="item">')
+        console.log("[AnimeWorld] search found", parts.length - 1, "item blocks")
         for (let i = 1; i < parts.length; i++) {
             let linkM = parts[i].match(/href="\/play\/([^"]+)"/)
             let titleM = parts[i].match(/class="name"[^>]*>([^<]+)</)
-            if (linkM && titleM) results.push({ id: linkM[1], title: titleM[1], url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
+            if (linkM && titleM) {
+                results.push({ id: linkM[1], title: titleM[1], url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
+            } else {
+                console.log("[AnimeWorld] search item", i, "failed to parse - link:", !!linkM, "title:", !!titleM)
+            }
         }
+        console.log("[AnimeWorld] search total results:", results.length)
         return results
     }
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
+        console.log("[AnimeWorld] findEpisodes id:", id)
         let res = await fetch(this._url("/play/" + id), { headers: this._headers(this.base) })
+        console.log("[AnimeWorld] episode page status:", res.status)
         if (!res.ok) throw new Error("findEpisodes failed " + res.status)
         let html = await res.text()
+        console.log("[AnimeWorld] episode page HTML length:", html.length)
         let episodes: EpisodeDetails[] = []
         let epRx = /<li\s+class="episode"[^>]*>[\s\S]*?<\/li>/g
         let m
+        let matchCount = 0
         while ((m = epRx.exec(html)) !== null) {
+            matchCount++
             let block = m[0]
             let idM = block.match(/data-id="([^"]+)"/)
             let numM = block.match(/data-episode-num="(\d+)"/)
@@ -66,41 +84,61 @@ class Provider {
                         title: "Episode " + num,
                     })
                 }
+            } else {
+                console.log("[AnimeWorld] episode block failed parse - idM:", !!idM, "numM:", !!numM)
             }
         }
+        console.log("[AnimeWorld] found", matchCount, "episode blocks, parsed", episodes.length, "episodes")
         if (episodes.length === 0) throw new Error("No episodes found.")
         episodes.sort(function (a, b) { return a.number - b.number })
+        console.log("[AnimeWorld] episodes sorted, first:", episodes[0].number, "last:", episodes[episodes.length - 1].number)
         return episodes
     }
 
     async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
+        console.log("[AnimeWorld] findEpisodeServer episode:", episode.id, "number:", episode.number)
         let servers = ["AnimeWorld", "Shiva", ""]
         let playerUrl = ""
         for (let si = 0; si < servers.length; si++) {
+            console.log("[AnimeWorld] trying server:", servers[si] || "(empty)")
             playerUrl = await this._tryPlayer(episode.id, servers[si], episode.url)
-            if (playerUrl) break
+            if (playerUrl) {
+                console.log("[AnimeWorld] player found on server:", servers[si] || "(empty)", "url:", playerUrl)
+                break
+            }
         }
-        if (!playerUrl) throw new Error("No player URL found")
+        if (!playerUrl) {
+            console.log("[AnimeWorld] no player URL found for episode:", episode.id)
+            throw new Error("No player URL found")
+        }
 
+        console.log("[AnimeWorld] fetching player page:", playerUrl)
         let plRes = await fetch(playerUrl, { headers: this._headers(episode.url) })
+        console.log("[AnimeWorld] player page status:", plRes.status)
         if (!plRes.ok) {
+            console.log("[AnimeWorld] player page failed, returning player URL as fallback")
             return { server: "AnimeWorld", headers: this._headers(playerUrl), videoSources: [{ url: playerUrl, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
         let plHtml = await plRes.text()
+        console.log("[AnimeWorld] player page HTML length:", plHtml.length)
         let sources: VideoSource[] = []
         let srcParts = plHtml.split("<source")
+        console.log("[AnimeWorld] found", srcParts.length - 1, "<source> tags")
         for (let s = 1; s < srcParts.length; s++) {
             let sm = srcParts[s].match(/src="([^"]+)"/)
             if (sm && !sources.some(function (x) { return x.url === sm[1] })) {
                 sources.push({ url: sm[1], quality: "auto", type: this._sourceType(sm[1]), subtitles: [] })
+                console.log("[AnimeWorld] source", sources.length, ":", sm[1].substring(0, 80))
             }
         }
 
         if (sources.length === 0) {
+            console.log("[AnimeWorld] no sources extracted, falling back to player URL")
             sources.push({ url: playerUrl, quality: "auto", type: "unknown", subtitles: [] })
         }
 
+        console.log("[AnimeWorld] returning", sources.length, "sources")
         return { server: "AnimeWorld", headers: this._headers(playerUrl), videoSources: sources }
     }
 }
