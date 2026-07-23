@@ -3,7 +3,7 @@
   "name": "AnimeWorld",
   "description": "AnimeWorld.ac Italian anime streaming provider.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/refs/heads/master/manifest.json",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Trancezzz",
   "type": "onlinestream-provider",
   "language": "typescript",
