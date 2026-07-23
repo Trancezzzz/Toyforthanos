@@ -150,64 +150,76 @@ class Provider {
     }
 
     async _extractFromChromeDP(playerUrl: string): Promise<EpisodeServer> {
-        console.log("[Kartoons] launching ChromeDP for player page extraction")
-        let browser = await ChromeDP.newBrowser({ headless: false, timeout: 180 })
+        console.log("[Kartoons] launching ChromeDP for player page at:", playerUrl)
+        let browser
+        try {
+            browser = await ChromeDP.newBrowser({ headless: false, timeout: 180 })
+            console.log("[Kartoons] browser launched, navigating...")
+        } catch (e) {
+            console.log("[Kartoons] failed to launch ChromeDP browser:", e)
+            throw new Error("ChromeDP browser launch failed: " + e)
+        }
+
         try {
             await browser.navigate(playerUrl)
-            console.log("[Kartoons] waiting for page to render (Turnstile will appear, solve it in the browser window)...")
-            await browser.sleep(12000)
+            console.log("[Kartoons] page loaded, waiting for React SPA to render...")
+            await browser.sleep(8000)
 
             let deadline = Date.now() + 90000
+            let pollCount = 0
             while (Date.now() < deadline) {
-                let result = await browser.evaluate(
-                    `(function() {
-                        var v = document.querySelector('video');
-                        if (v && (v.currentSrc || v.src)) {
-                            return JSON.stringify({ type: 'video', url: v.currentSrc || v.src });
-                        }
-                        var f = document.querySelector('iframe');
-                        if (f && f.src && f.src.indexOf('http') > -1) {
-                            return JSON.stringify({ type: 'iframe', url: f.src });
-                        }
-                        var all = document.body ? document.body.innerHTML : '';
-                        var m3u = all.match(/https?:\\\/\\\/[^'"\\s]+\\.m3u8[^'"\\s]*/);
-                        if (m3u) {
-                            return JSON.stringify({ type: 'm3u8', url: m3u[0] });
-                        }
-                        var mp4 = all.match(/https?:\\\/\\\/[^'"\\s]+\\.mp4[^'"\\s]*/);
-                        if (mp4) {
-                            return JSON.stringify({ type: 'mp4', url: mp4[0] });
-                        }
-                        return '';
-                    })()`
-                )
+                pollCount++
+                let result = await browser.evaluate(`(() => {
+                    // 1. check for video element
+                    var v = document.querySelector('video');
+                    if (v && v.readyState > 0) {
+                        return { found: true, type: 'video', url: v.currentSrc || v.src || '' };
+                    }
+                    // 2. check for iframe embed
+                    var f = document.querySelector('iframe');
+                    if (f && f.src && f.src.indexOf('http') === 0) {
+                        return { found: true, type: 'iframe', url: f.src };
+                    }
+                    // 3. scan page text for m3u8
+                    var html = document.body ? document.body.innerHTML : '';
+                    var m3u = html.match(/https?:\\\/\\\/[^'"\\s<>]+\\.m3u8[^'"\\s<>]*/);
+                    if (m3u) {
+                        return { found: true, type: 'm3u8', url: m3u[0] };
+                    }
+                    // 4. scan for mp4
+                    var mp4 = html.match(/https?:\\\/\\\/[^'"\\s<>]+\\.mp4[^'"\\s<>]*/);
+                    if (mp4) {
+                        return { found: true, type: 'mp4', url: mp4[0] };
+                    }
+                    // 5. check for Turnstile widget (are we even showing the challenge?)
+                    var turnstileIframe = document.querySelector('iframe[src*="challenges"], iframe[src*="turnstile"], iframe[src*="cf-turnstile"]');
+                    return { found: false, hasTurnstile: !!turnstileIframe, videoCount: document.querySelectorAll('video').length, iframeCount: document.querySelectorAll('iframe').length };
+                })()`)
 
-                if (result && result.length > 0) {
-                    let parsed = JSON.parse(result)
-                    if (parsed && parsed.url) {
-                        console.log("[Kartoons] ChromeDP extracted", parsed.type, "source:", parsed.url.substring(0, 80))
-                        await browser.close()
-                        let sourceType = parsed.type === "m3u8" ? "m3u8" : "mp4"
-                        return {
-                            server: "Kartoons",
-                            headers: { Referer: this.site + "/" },
-                            videoSources: [{
-                                url: parsed.url,
-                                type: sourceType,
-                                quality: "auto",
-                                subtitles: [],
-                            }]
-                        }
+                if (result && result.found) {
+                    console.log("[Kartoons] ChromeDP extracted source type:", result.type, "url:", (result.url || "").substring(0, 80))
+                    try { await browser.close() } catch (_) {}
+                    let sourceType = result.type === "video" || result.type === "mp4" ? "mp4" : "m3u8"
+                    return {
+                        server: "Kartoons",
+                        headers: { Referer: this.site + "/" },
+                        videoSources: [{
+                            url: result.url,
+                            type: sourceType,
+                            quality: "auto",
+                            subtitles: [],
+                        }]
                     }
                 }
 
-                console.log("[Kartoons] no source yet, waiting 3s...")
+                console.log("[Kartoons] poll", pollCount, "- no source yet, hasTurnstile:", result && result.hasTurnstile, "videos:", result && result.videoCount, "iframes:", result && result.iframeCount)
                 await browser.sleep(3000)
             }
 
-            await browser.close()
+            console.log("[Kartoons] ChromeDP polling timed out after 90s")
+            try { await browser.close() } catch (_) {}
         } catch (e) {
-            console.log("[Kartoons] ChromeDP error:", e)
+            console.log("[Kartoons] ChromeDP navigation or polling error:", e)
             try { await browser.close() } catch (_) {}
         }
         throw new Error("Could not retrieve video sources from ChromeDP")

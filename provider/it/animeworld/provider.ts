@@ -40,13 +40,15 @@ class Provider {
         for (let i = 1; i < parts.length; i++) {
             let linkM = parts[i].match(/href="\/play\/([^"]+)"/)
             let titleM = parts[i].match(/class="name"[^>]*>([^<]+)</)
+            let jtitleM = parts[i].match(/data-jtitle="([^"]+)"/)
             if (linkM && titleM) {
                 let title = titleM[1]
+                let jtitle = jtitleM ? jtitleM[1].toLowerCase() : ""
                 if (keywords.length === 0) {
                     results.push({ id: linkM[1], title: title, url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
                 } else {
                     let titleLower = title.toLowerCase()
-                    let matches = keywords.some(function(k) { return titleLower.indexOf(k) !== -1 })
+                    let matches = keywords.some(function(k) { return titleLower.indexOf(k) !== -1 || jtitle.indexOf(k) !== -1 })
                     if (matches) {
                         results.push({ id: linkM[1], title: title, url: this._url("/play/" + linkM[1]), subOrDub: "sub" })
                     } else {
@@ -74,8 +76,7 @@ class Provider {
             results = await this._parseSearchPage(html, keywords)
         }
 
-        // If no results and query has non-Latin chars (Japanese, etc.), 
-        // extract Latin words and try a second search
+        // If no results, try Latin-only words fallback (catches Romaji queries)
         if (results.length === 0) {
             let latinWords = opts.query.match(/[a-zA-Z]+/g)
             if (latinWords && latinWords.length > 0) {
