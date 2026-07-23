@@ -12,8 +12,8 @@ class Provider {
         return this.base + path
     }
 
-    _sourceType(url: string) {
-        return url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4"
+    _sourceType(_url: string) {
+        return "mp4"
     }
 
     async _tryPlayer(episodeId: string, server: string, referer: string) {
