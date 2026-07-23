@@ -4,6 +4,7 @@
 class Provider {
     api = "https://api.kartoons.me/api"
     site = "https://kartoons.me"
+    sitekey = "0x4AAAAAACnvUm93__ifaEkF"
 
     getSettings(): Settings {
         return {
@@ -131,111 +132,133 @@ class Provider {
         throw new Error("No episodes found")
     }
 
+    async _fetchLinks(episodeId: string, token?: string): Promise<any> {
+        let opts: any = { timeout: 30 }
+        if (token) {
+            opts.headers = {
+                "X-Challenge-Token": token,
+                "X-Challenge-Retry": "true",
+            }
+        }
+        let res = await fetch(this.api + "/shows/episode/" + episodeId + "/links", opts)
+        if (!res.ok) return null
+        return res.json()
+    }
+
+    async _solveTurnstile(): Promise<string> {
+        let cached = $store.get("kartoons_ts_token")
+        if (cached) {
+            console.log("[Kartoons] using cached Turnstile token")
+            return cached
+        }
+
+        console.log("[Kartoons] launching ChromeDP for Turnstile solve")
+        let browser = await ChromeDP.newBrowser({ headless: false, timeout: 120 })
+        try {
+            await browser.navigate(this.site)
+            await browser.sleep(3000)
+
+            console.log("[Kartoons] injecting Turnstile widget")
+            let token = await browser.evaluate(
+                `(function() {
+                    return new Promise(function(resolve) {
+                        let p = document.createElement('div');
+                        p.id = 'k-ts';
+                        p.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#1a1a2e;padding:24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-family:sans-serif;';
+                        document.body.appendChild(p);
+
+                        let l = document.createElement('p');
+                        l.textContent = 'Kartoons needs a security check. Complete the CAPTCHA.';
+                        l.style.cssText = 'color:#e0e0e0;margin:0 0 16px 0;font-size:14px;text-align:center;';
+                        p.appendChild(l);
+
+                        let w = document.createElement('div');
+                        w.id = 'k-ts-widget';
+                        p.appendChild(w);
+
+                        let done = function(t) {
+                            resolve(t);
+                            setTimeout(function() { p.remove(); }, 500);
+                        };
+
+                        if (typeof turnstile !== 'undefined') {
+                            turnstile.render('#k-ts-widget', {
+                                sitekey: '` + this.sitekey + `',
+                                callback: done
+                            });
+                        } else {
+                            window.initKartoons = function() {
+                                turnstile.render('#k-ts-widget', {
+                                    sitekey: '` + this.sitekey + `',
+                                    callback: done
+                                });
+                            };
+                            let s = document.createElement('script');
+                            s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=initKartoons';
+                            s.async = true;
+                            s.defer = true;
+                            document.head.appendChild(s);
+                        }
+                    });
+                })()`
+            )
+
+            await browser.close()
+            if (token && token.length > 0) {
+                console.log("[Kartoons] Turnstile solved, caching token")
+                $store.set("kartoons_ts_token", token)
+                setTimeout(function() { $store.set("kartoons_ts_token", "") }, 120000)
+                return token
+            }
+        } catch (e) {
+            console.log("[Kartoons] Turnstile solver error:", e)
+            try { await browser.close() } catch (_) {}
+        }
+        return ""
+    }
+
+    _buildEpisodeServer(linksData: any): EpisodeServer {
+        let sources: VideoSource[] = []
+        if (Array.isArray(linksData)) {
+            for (let i = 0; i < linksData.length; i++) {
+                let link = linksData[i]
+                let url = link.url || link
+                if (typeof url === "string") {
+                    sources.push({
+                        url: url,
+                        type: url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
+                        quality: link.label || link.quality || "auto",
+                        subtitles: [],
+                    })
+                }
+            }
+        }
+        return {
+            server: "Kartoons",
+            headers: { Referer: this.site + "/" },
+            videoSources: sources,
+        }
+    }
+
     async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
         console.log("[Kartoons] findEpisodeServer episode:", episode.id, "server:", _server)
 
-        let linksRes = await fetch(this.api + "/shows/episode/" + episode.id + "/links")
-        console.log("[Kartoons] direct links fetch status:", linksRes.status)
-        if (linksRes.ok) {
-            let body = linksRes.json()
-            console.log("[Kartoons] links body success:", body.success, "has data:", !!body.data)
-            if (body.success && body.data) {
-                let sources: VideoSource[] = []
-                if (Array.isArray(body.data)) {
-                    for (let i = 0; i < body.data.length; i++) {
-                        let link = body.data[i]
-                        let url = link.url || link
-                        if (typeof url === "string") {
-                            sources.push({
-                                url: url,
-                                type: url.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
-                                quality: link.label || link.quality || "auto",
-                                subtitles: [],
-                            })
-                        }
-                    }
-                }
-                console.log("[Kartoons] direct links yielded", sources.length, "sources")
-                if (sources.length > 0) {
-                    return { server: "Kartoons", headers: { Referer: this.site + "/" }, videoSources: sources }
-                }
-            }
-        } else {
-            let bodyText = await linksRes.text()
-            console.log("[Kartoons] direct links failed, body:", bodyText.substring(0, 200))
+        let data = await this._fetchLinks(episode.id)
+        if (data && data.success && data.data) {
+            console.log("[Kartoons] direct fetch succeeded")
+            return this._buildEpisodeServer(data.data)
         }
 
-        console.log("[Kartoons] falling back to ChromeDP player page scraping")
-        let browser = await ChromeDP.newBrowser({ headless: true, timeout: 60 })
-        try {
-            console.log("[Kartoons] navigating to player page:", episode.url)
-            await browser.navigate(episode.url)
-            await browser.sleep(5000)
-
-            console.log("[Kartoons] looking for video element")
-            let videoSrc = await browser.evaluate(
-                "(function(){let v=document.querySelector('video');return v?v.currentSrc||v.src:''})()"
-            )
-            console.log("[Kartoons] video element src:", videoSrc ? videoSrc.substring(0, 100) : "none")
-            if (videoSrc && videoSrc.length > 0 && videoSrc.indexOf("http") !== -1) {
-                await browser.close()
-                console.log("[Kartoons] found video source via ChromeDP")
-                return {
-                    server: "Kartoons",
-                    headers: { Referer: this.site + "/" },
-                    videoSources: [{
-                        url: videoSrc,
-                        type: videoSrc.indexOf(".m3u8") !== -1 ? "m3u8" : "mp4",
-                        quality: "auto",
-                        subtitles: [],
-                    }]
-                }
+        console.log("[Kartoons] direct fetch blocked, solving Turnstile...")
+        let token = await this._solveTurnstile()
+        if (token) {
+            console.log("[Kartoons] retrying with Turnstile token")
+            data = await this._fetchLinks(episode.id, token)
+            if (data && data.success && data.data) {
+                console.log("[Kartoons] Turnstile retry succeeded")
+                return this._buildEpisodeServer(data.data)
             }
-
-            console.log("[Kartoons] looking for iframe")
-            let iframeSrc = await browser.evaluate(
-                "(function(){let f=document.querySelector('iframe');return f?f.src:''})()"
-            )
-            console.log("[Kartoons] iframe src:", iframeSrc ? iframeSrc.substring(0, 100) : "none")
-            if (iframeSrc && iframeSrc.length > 0 && iframeSrc.indexOf("http") !== -1) {
-                await browser.close()
-                console.log("[Kartoons] found iframe source via ChromeDP")
-                return {
-                    server: "Kartoons",
-                    headers: { Referer: this.site + "/" },
-                    videoSources: [{
-                        url: iframeSrc,
-                        type: "unknown",
-                        quality: "auto",
-                        subtitles: [],
-                    }]
-                }
-            }
-
-            console.log("[Kartoons] extracting page HTML for m3u8 search")
-            let html = await browser.outerHTML("body")
-            console.log("[Kartoons] body HTML length:", html.length)
-            await browser.close()
-
-            let m3u8Rx = /https?:\/\/[^'"\s]+\.m3u8[^'"\s]*/g
-            let m3u8Match = m3u8Rx.exec(html)
-            console.log("[Kartoons] m3u8 regex match:", m3u8Match ? m3u8Match[0].substring(0, 100) : "none")
-            if (m3u8Match) {
-                console.log("[Kartoons] found m3u8 URL in HTML")
-                return {
-                    server: "Kartoons",
-                    headers: { Referer: this.site + "/" },
-                    videoSources: [{
-                        url: m3u8Match[0],
-                        type: "m3u8",
-                        quality: "auto",
-                        subtitles: [],
-                    }]
-                }
-            }
-        } catch (e) {
-            console.log("[Kartoons] ChromeDP error:", e)
-            try { await browser.close() } catch (_) {}
+            console.log("[Kartoons] Turnstile retry still failed")
         }
 
         console.log("[Kartoons] all methods exhausted, throwing")
