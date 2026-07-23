@@ -149,74 +149,81 @@ class Provider {
         return res.json()
     }
 
-    async _solveTurnstile(playerUrl: string): Promise<string> {
-        let cached = $store.get("kartoons_ts_token")
-        if (cached) {
-            console.log("[Kartoons] using cached Turnstile token")
-            return cached
-        }
-
-        console.log("[Kartoons] launching ChromeDP for Turnstile solve at:", playerUrl)
-        let browser = await ChromeDP.newBrowser({ headless: false, timeout: 120 })
+    async _extractFromChromeDP(playerUrl: string): Promise<EpisodeServer> {
+        console.log("[Kartoons] launching ChromeDP for player page extraction")
+        let browser = await ChromeDP.newBrowser({ headless: false, timeout: 180 })
         try {
             await browser.navigate(playerUrl)
-            console.log("[Kartoons] waiting for React SPA + Turnstile to render...")
-            await browser.sleep(10000)
+            console.log("[Kartoons] waiting for page to render (Turnstile will appear, solve it in the browser window)...")
+            await browser.sleep(12000)
 
-            let token = await browser.evaluate(
-                `(function() {
-                    return new Promise(function(resolve) {
-                        var deadline = Date.now() + 60000;
-
-                        function tryClick() {
-                            var el = document.querySelector('[name="cf-turnstile-response"]');
-                            if (el && el.value) { resolve(el.value); return; }
-
-                            var frames = document.querySelectorAll('iframe');
-                            for (var i = 0; i < frames.length; i++) {
-                                var r = frames[i].getBoundingClientRect();
-                                if (r.width > 200 && r.width < 350 && r.height > 40 && r.height < 100) {
-                                    var x = r.left + 30;
-                                    var y = r.top + r.height / 2;
-                                    var target = document.elementFromPoint(x, y);
-                                    if (target) {
-                                        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
-                                        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
-                                        target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
-                                        console.log('[Kartoons] clicked Turnstile iframe');
-                                    }
-                                    break;
-                                }
-                            }
-
-                            var pollDeadline = Date.now() + 35000;
-                            function poll() {
-                                var el2 = document.querySelector('[name="cf-turnstile-response"]');
-                                if (el2 && el2.value) { resolve(el2.value); return; }
-                                if (Date.now() > pollDeadline) { resolve(''); return; }
-                                setTimeout(poll, 500);
-                            }
-                            setTimeout(poll, 3000);
+            let deadline = Date.now() + 90000
+            while (Date.now() < deadline) {
+                let result = await browser.evaluate(
+                    `(function() {
+                        var v = document.querySelector('video');
+                        if (v && (v.currentSrc || v.src)) {
+                            return JSON.stringify({ type: 'video', url: v.currentSrc || v.src });
                         }
+                        var f = document.querySelector('iframe');
+                        if (f && f.src && f.src.indexOf('http') > -1) {
+                            return JSON.stringify({ type: 'iframe', url: f.src });
+                        }
+                        var all = document.body ? document.body.innerHTML : '';
+                        var m3u = all.match(/https?:\\\/\\\/[^'"\\s]+\\.m3u8[^'"\\s]*/);
+                        if (m3u) {
+                            return JSON.stringify({ type: 'm3u8', url: m3u[0] });
+                        }
+                        var mp4 = all.match(/https?:\\\/\\\/[^'"\\s]+\\.mp4[^'"\\s]*/);
+                        if (mp4) {
+                            return JSON.stringify({ type: 'mp4', url: mp4[0] });
+                        }
+                        return '';
+                    })()`
+                )
 
-                        setTimeout(tryClick, 3000);
-                    });
-                })()`
-            )
+                if (result && result.length > 0) {
+                    let parsed = JSON.parse(result)
+                    if (parsed && parsed.url) {
+                        console.log("[Kartoons] ChromeDP extracted", parsed.type, "source:", parsed.url.substring(0, 80))
+                        await browser.close()
+                        let sourceType = parsed.type === "m3u8" ? "m3u8" : "mp4"
+                        return {
+                            server: "Kartoons",
+                            headers: { Referer: this.site + "/" },
+                            videoSources: [{
+                                url: parsed.url,
+                                type: sourceType,
+                                quality: "auto",
+                                subtitles: [],
+                            }]
+                        }
+                    }
+                }
+
+                console.log("[Kartoons] no source yet, waiting 3s...")
+                await browser.sleep(3000)
+            }
 
             await browser.close()
-            if (token && token.length > 0) {
-                console.log("[Kartoons] Turnstile solved, caching token")
-                $store.set("kartoons_ts_token", token)
-                setTimeout(function() { $store.set("kartoons_ts_token", "") }, 120000)
-                return token
-            }
-            console.log("[Kartoons] Turnstile solve returned empty token")
         } catch (e) {
-            console.log("[Kartoons] Turnstile solver error:", e)
+            console.log("[Kartoons] ChromeDP error:", e)
             try { await browser.close() } catch (_) {}
         }
-        return ""
+        throw new Error("Could not retrieve video sources from ChromeDP")
+    }
+
+    async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
+        console.log("[Kartoons] findEpisodeServer episode:", episode.id, "server:", _server)
+
+        let data = await this._fetchLinks(episode.id)
+        if (data && data.success && data.data) {
+            console.log("[Kartoons] direct fetch succeeded")
+            return this._buildEpisodeServer(data.data)
+        }
+
+        console.log("[Kartoons] direct fetch blocked, launching ChromeDP to player page")
+        return await this._extractFromChromeDP(episode.url)
     }
 
     _buildEpisodeServer(linksData: any): EpisodeServer {
@@ -240,30 +247,5 @@ class Provider {
             headers: { Referer: this.site + "/" },
             videoSources: sources,
         }
-    }
-
-    async findEpisodeServer(episode: EpisodeDetails, _server: string): Promise<EpisodeServer> {
-        console.log("[Kartoons] findEpisodeServer episode:", episode.id, "server:", _server)
-
-        let data = await this._fetchLinks(episode.id)
-        if (data && data.success && data.data) {
-            console.log("[Kartoons] direct fetch succeeded")
-            return this._buildEpisodeServer(data.data)
-        }
-
-        console.log("[Kartoons] direct fetch blocked, solving Turnstile via player page...")
-        let token = await this._solveTurnstile(episode.url)
-        if (token) {
-            console.log("[Kartoons] retrying with Turnstile token")
-            data = await this._fetchLinks(episode.id, token)
-            if (data && data.success && data.data) {
-                console.log("[Kartoons] Turnstile retry succeeded")
-                return this._buildEpisodeServer(data.data)
-            }
-            console.log("[Kartoons] Turnstile retry still failed")
-        }
-
-        console.log("[Kartoons] all methods exhausted, throwing")
-        throw new Error("Could not retrieve video sources")
     }
 }
