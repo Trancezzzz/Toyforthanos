@@ -1,13 +1,33 @@
 /// <reference path="./online-streaming-provider.d.ts" />
 
-console.log("[HiAnime] PROVIDER LOADED v1.0.3-shiva")
-
 class Provider {
     base = "https://hianime.ms"
-    UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    _uas = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    ]
+
+    _serverReferers = {
+        ryu: "https://megaplay.buzz/",
+        volt: "https://vidnest.fun/",
+        warp: "https://tryembed.us.cc/",
+        ayame: "https://vidnest.fun/",
+    }
+
+    _rand<T>(arr: T[]): T {
+        return arr[Math.floor(Math.random() * arr.length)]
+    }
 
     _headers(referer: string) {
-        return { "User-Agent": this.UA, Referer: referer }
+        return {
+            "User-Agent": this._rand(this._uas),
+            Referer: referer,
+            Accept: "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
     }
 
     _url(path: string) {
@@ -26,16 +46,11 @@ class Provider {
     }
 
     async _scrapeEpisodeData(episodeUrl: string): Promise<{ anilistId: string, streamToken: string }> {
-        console.log("[HiAnime] scraping episode data from:", episodeUrl.substring(0, 70))
         let res = await fetch(episodeUrl, { headers: this._headers(this.base) })
-        if (!res.ok) {
-            console.log("[HiAnime] scrape failed:", res.status)
-            return { anilistId: "", streamToken: "" }
-        }
+        if (!res.ok) return { anilistId: "", streamToken: "" }
         let html = await res.text()
         let aniM = html.match(/var anilistId\s*=\s*(\d+)/)
         let tokenM = html.match(/data-stream-token="([^"]+)"/)
-        console.log("[HiAnime] anilistId:", aniM ? aniM[1] : "not found", "token:", tokenM ? "found" : "not found")
         return { anilistId: aniM ? aniM[1] : "", streamToken: tokenM ? tokenM[1] : "" }
     }
 
@@ -43,12 +58,6 @@ class Provider {
         if (!token) return ""
         let d = this._b64decode(token)
         return d.split(":")[0]
-    }
-
-    _versionFromServer(server: string): string {
-        let s = server.toLowerCase()
-        if (s.indexOf("dub") !== -1) return "dub"
-        return "sub"
     }
 
     _serverKey(server: string): string {
@@ -61,24 +70,18 @@ class Provider {
 
     getSettings(): Settings {
         return {
-            episodeServers: ["Shiva", "Ryu Sub", "Ryu Dub", "Volt Sub", "Volt Dub", "Warp Sub", "Warp Dub", "Ayame Sub", "Ayame Dub"],
+            episodeServers: ["Ryu", "Volt", "Warp", "Ayame"],
             supportsDub: true,
         }
     }
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
         if (!opts.query.trim()) return []
-        console.log("[HiAnime] search:", opts.query)
         let res = await fetch(this._url("/search?q=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
-        if (!res.ok) {
-            console.log("[HiAnime] search failed:", res.status)
-            return []
-        }
+        if (!res.ok) return []
         let html = await res.text()
         let results: SearchResult[] = []
         let parts = html.split('<div class="flw-item">')
-        console.log("[HiAnime] search found", parts.length - 1, "items")
-
         for (let i = 1; i < parts.length; i++) {
             let linkM = parts[i].match(/href="https:\/\/hianime\.ms\/details\/([^"]+)"/)
             let titleM = parts[i].match(/class="dynamic-name"[^>]*>([^<]+)</)
@@ -93,21 +96,16 @@ class Provider {
                 })
             }
         }
-        console.log("[HiAnime] search returned", results.length, "results")
         return results
     }
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
         let { name, animeId } = this._extractSlug(id)
-        if (!name) throw new Error("Invalid slug: " + id)
-        console.log("[HiAnime] findEpisodes slug:", id, "name:", name, "animeId:", animeId)
-
+        if (!name) return []
         let ep1Url = this._url("/watch-" + name + "-episode-1-" + animeId)
-        console.log("[HiAnime] fetching:", ep1Url)
         let res = await fetch(ep1Url, { headers: this._headers(this.base) })
-        if (!res.ok) throw new Error("findEpisodes failed " + res.status)
+        if (!res.ok) return []
         let html = await res.text()
-
         let episodes: EpisodeDetails[] = []
         let epRx = /<a\s+class="ws-ep[^"]*"[^>]*>[\s\S]*?<\/a>/g
         let m
@@ -115,7 +113,6 @@ class Provider {
             let block = m[0]
             let numM = block.match(/data-episode="(\d+)"/)
             let urlM = block.match(/data-url="([^"]+)"/)
-            let tokenM = block.match(/data-stream-token="([^"]+)"/)
             let titleM = block.match(/<span class="ws-ep__title">([^<]+)</)
             if (numM && urlM) {
                 let num = parseInt(numM[1], 10)
@@ -129,26 +126,23 @@ class Provider {
                 }
             }
         }
-
-        if (episodes.length === 0) throw new Error("No episodes found.")
         episodes.sort(function (a, b) { return a.number - b.number })
-        console.log("[HiAnime] found", episodes.length, "episodes:", episodes[0].number, "-", episodes[episodes.length - 1].number)
         return episodes
     }
 
     async findEpisodeServer(episode: EpisodeDetails, server: string): Promise<EpisodeServer> {
-        console.log("[HiAnime] findEpisodeServer ep:", episode.number, "server:", server)
-        let version = this._versionFromServer(server)
+        let url = ""
+        let version = episode.subOrDub === "dub" ? "dub" : "sub"
         let key = this._serverKey(server)
         let data = await this._scrapeEpisodeData(episode.url)
-        let url = ""
+        let sr = this._serverReferers[key as keyof typeof this._serverReferers] || "https://megaplay.buzz/"
 
-        if (key === "volt") {
-            if (data.anilistId) url = "https://vidnest.fun/anime/" + data.anilistId + "/" + episode.number + "/" + version
-        } else if (key === "warp") {
-            if (data.anilistId) url = "https://tryembed.us.cc/embed/anime/" + data.anilistId + "/" + episode.number + "/" + version
-        } else if (key === "ayame") {
-            if (data.anilistId) url = "https://vidnest.fun/animepahe/" + data.anilistId + "/" + episode.number + "/" + version
+        if (key === "volt" && data.anilistId) {
+            url = "https://vidnest.fun/anime/" + data.anilistId + "/" + episode.number + "/" + version
+        } else if (key === "warp" && data.anilistId) {
+            url = "https://tryembed.us.cc/embed/anime/" + data.anilistId + "/" + episode.number + "/" + version
+        } else if (key === "ayame" && data.anilistId) {
+            url = "https://vidnest.fun/animepahe/" + data.anilistId + "/" + episode.number + "/" + version
         }
 
         if (!url) {
@@ -157,11 +151,9 @@ class Provider {
         }
 
         if (!url) {
-            console.log("[HiAnime] fallback: returning episode URL")
             return { server: server, headers: this._headers(episode.url), videoSources: [{ url: episode.url, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
-        console.log("[HiAnime] player URL:", url.substring(0, 70) + "...")
-        return { server: server, headers: this._headers(episode.url), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
+        return { server: server, headers: this._headers(sr), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
     }
 }

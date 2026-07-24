@@ -1,9 +1,9 @@
 {
   "id": "hianime",
   "name": "HiAnime",
-  "description": "HiAnime.ms English anime streaming provider. Supports Ryu, Volt, Warp, and Ayame servers with Sub and Dub.",
+  "description": "HiAnime.ms English anime streaming provider.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/hianime/manifest.json",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "author": "Trancezzz",
   "type": "onlinestream-provider",
   "language": "typescript",
@@ -19,16 +19,12 @@
         "name": "defaultServer",
         "label": "Default Server",
         "type": "select",
-        "default": "Ryu Sub",
+        "default": "Ryu",
         "options": [
-          { "label": "Ryu Sub", "value": "Ryu Sub" },
-          { "label": "Ryu Dub", "value": "Ryu Dub" },
-          { "label": "Volt Sub", "value": "Volt Sub" },
-          { "label": "Volt Dub", "value": "Volt Dub" },
-          { "label": "Warp Sub", "value": "Warp Sub" },
-          { "label": "Warp Dub", "value": "Warp Dub" },
-          { "label": "Ayame Sub", "value": "Ayame Sub" },
-          { "label": "Ayame Dub", "value": "Ayame Dub" }
+          { "label": "Ryu", "value": "Ryu" },
+          { "label": "Volt", "value": "Volt" },
+          { "label": "Warp", "value": "Warp" },
+          { "label": "Ayame", "value": "Ayame" }
         ]
       }
     ]
