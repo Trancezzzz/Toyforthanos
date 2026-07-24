@@ -20,7 +20,6 @@ async function bypassFetch(url: string, timeoutMs = 30000, waitMs = 15000, loadM
 
 function extractSearchResults(html: string, seen: Set<string>): SearchResult[] {
     let out: SearchResult[] = []
-    // First pass: find all title links in document order, collect unique slug
     let linkRe = /<a[^>]*href="\/title\/([a-z0-9]+[^"\/]*)"/g
     let links: { slug: string; idx: number; id: string }[] = []
     let m: RegExpExecArray | null
@@ -46,7 +45,7 @@ function extractSearchResults(html: string, seen: Set<string>): SearchResult[] {
             if (im[1]) lastAlt = im[1]
         }
 
-        // Look forward for a title element inside a heading or known class
+        // Look forward for a title element
         let after = html.substring(idx, idx + 500)
         let titleEl = after.match(/title-row-card__title[^>]*>([^<]+)</) ||
                       after.match(/<h[1-4][^>]*>([^<]+)</) ||
@@ -55,12 +54,52 @@ function extractSearchResults(html: string, seen: Set<string>): SearchResult[] {
 
         let title = titleEl ? titleEl[1] : (lastAlt || slug)
 
-        // Find nearest image src
         let imgSrc = ""
         let imgS = (before + after.substring(0, 200)).match(/<img[^>]*src="([^"]*?)"[^>]*>/)
         if (imgS) imgSrc = imgS[1]
 
         out.push({ id: slug, title: title || slug, image: imgSrc, synonyms: [] })
+    }
+    return out
+}
+
+// Extract search results directly from captured API responses
+function extractApiSearchResults(api: any, seen: Set<string>): SearchResult[] {
+    if (!api) return []
+    let out: SearchResult[] = []
+
+    for (let key of Object.keys(api)) {
+        let d = api[key]
+        if (!d || typeof d !== "object") continue
+
+        // Collect all potential items arrays from this response
+        let candidates: any[][] = []
+        if (Array.isArray(d)) {
+            for (let page of d) {
+                if (page?.items) candidates.push(page.items)
+                if (page?.data?.titles) candidates.push(page.data.titles)
+                if (page?.data?.items) candidates.push(page.data.items)
+            }
+        }
+        if (d.items && Array.isArray(d.items)) candidates.push(d.items)
+        if (d.data?.titles && Array.isArray(d.data.titles)) candidates.push(d.data.titles)
+        if (d.data?.items && Array.isArray(d.data.items)) candidates.push(d.data.items)
+        if (d.data?.results && Array.isArray(d.data.results)) candidates.push(d.data.results)
+
+        for (let items of candidates) {
+            for (let item of items) {
+                let slug = item.slug || item.hid || String(item.id || "")
+                let id = typeof slug === "string" ? slug.split("-")[0] : slug
+                if (!id || seen.has(id)) continue
+                seen.add(id)
+                out.push({
+                    id: slug,
+                    title: item.name || item.title || slug,
+                    image: item.poster || item.image || item.cover || "",
+                    synonyms: [],
+                })
+            }
+        }
     }
     return out
 }
@@ -75,42 +114,52 @@ class Provider {
         let seen = new Set<string>()
         let all: SearchResult[] = []
         let q = opts.query.replace(/[:\-]/g, " ")
-        let qLower = q.toLowerCase()
-        let maxPages = 2
+        let qLower = q.toLowerCase().trim()
 
-        for (let page = 1; page <= maxPages; page++) {
-            let url = base + "/browse?keyword=" + encodeURIComponent(q) + "&sort=relevance:desc"
-            if (page > 1) url += "&page=" + page
-            let { body: html } = await bypassFetch(url, 15000, 5000, false, false)
-            if (!html) break
+        // Try multiple search URL patterns in order of likelihood
+        let urls = [
+            base + "/browse?keyword=" + encodeURIComponent(q) + "&sort=relevance:desc",
+            base + "/browse?keyword=" + encodeURIComponent(q),
+            base + "/browse?search=" + encodeURIComponent(q),
+            base + "/search?keyword=" + encodeURIComponent(q),
+            base + "/search?q=" + encodeURIComponent(q),
+        ]
 
-            let results = extractSearchResults(html, seen)
-            if (results.length === 0) break
-            for (let r of results) all.push(r)
+        for (let url of urls) {
+            let { body: html, api } = await bypassFetch(url, 20000, 8000, false, false)
 
-            // Stop if we found an exact title match on page 1
-            if (page === 1) {
-                for (let r of results) {
-                    if (r.title.toLowerCase() === qLower || r.id.replace(/-/g, " ") === qLower) {
-                        log("early exit: exact match found")
-                        return all
+            // Strategy 1: Try captured API responses first
+            if (api) {
+                all = extractApiSearchResults(api, seen)
+                log("try:", url.slice(0, 80), "api found:", all.length)
+                if (all.length > 0) {
+                    for (let r of all) {
+                        if (r.title.toLowerCase() === qLower) {
+                            log("exact match from API:", r.title)
+                            return all
+                        }
                     }
+                    return all
                 }
             }
 
-            // Check if more pages exist
-            let npager = html.match(/npager__num[^>]*>(\d+)<\/button>/g)
-            let lastPage = 1
-            if (npager) {
-                for (let n of npager) {
-                    let p = parseInt(n.match(/>(\d+)</)?.[1] || "1")
-                    if (p > lastPage) lastPage = p
+            // Strategy 2: Fall back to HTML parsing of rendered SPA
+            if (html) {
+                all = extractSearchResults(html, seen)
+                log("try:", url.slice(0, 80), "html found:", all.length)
+                if (all.length > 0) {
+                    for (let r of all) {
+                        if (r.title.toLowerCase() === qLower) {
+                            log("exact match from HTML:", r.title)
+                            return all
+                        }
+                    }
+                    return all
                 }
             }
-            if (page >= lastPage) break
         }
 
-        log("search results:", all.length)
+        log("final results:", all.length)
         return all
     }
 

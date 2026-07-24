@@ -101,14 +101,14 @@ async function handleSolve(reqBody) {
       if (ct.includes('json') || ct.includes('javascript')) {
         consoleLogs.push(`[API] ${resp.status()} ${url.slice(0, 200)}`);
       }
-      // Capture MangaFire API responses (chapters list + chapter pages)
-      if (url.includes('/api/') && ct.includes('json')) {
+      // Capture ALL JSON responses (search API, chapter API, etc.)
+      if (ct.includes('json')) {
         try {
           const json = await resp.json();
           const key = url.split('?')[0];
           apiResponses[key] = json;
-          const summary = json?.data?.chapters ? `chapters:${json.data.chapters.length}` : json?.data?.pages ? `pages:${json.data.pages.length}` : 'ok';
-          consoleLogs.push(`[CAPTURE] ${key.slice(0, 80)} ${summary}`);
+          const summary = json?.items ? `items:${json.items.length}` : json?.data?.chapters ? `chapters:${json.data.chapters.length}` : json?.data?.pages ? `pages:${json.data.pages.length}` : json?.data?.titles ? `titles:${json.data.titles.length}`:'ok';
+          consoleLogs.push(`[CAPTURE] ${resp.status()} ${key.slice(0, 120)} ${summary}`);
         } catch {}
       }
     });
