@@ -20,18 +20,22 @@ async function bypassFetch(url: string, timeoutMs = 30000, waitMs = 15000, loadM
 
 function extractSearchResults(html: string, seen: Set<string>): SearchResult[] {
     let out: SearchResult[] = []
-    let re = /<a[^>]*class="title-rows__link"[^>]*href="\/title\/([^"]+)"[^>]*>/g
+    let re = /<a[^>]*href="\/title\/([a-z0-9]+[^"\/]*)"/g
     let m: RegExpExecArray | null
+    let idOrder = new Map<string, string>()
     while ((m = re.exec(html)) !== null) {
         let slug = m[1]
-        if (seen.has(slug)) continue
-        seen.add(slug)
-        let block = html.substring(m.index)
-        let endIdx = block.indexOf("</a>")
-        let card = endIdx > -1 ? block.substring(0, endIdx + 4) : ""
-        let titleM = card.match(/title-row-card__title[^>]*>([^<]+)</)
-        let title = titleM ? titleM[1].trim() : slug
-        let imgM = card.match(/<img[^>]*src="([^"]*)"[^>]*>/)
+        let id = slug.split("-")[0]
+        if (!idOrder.has(id)) idOrder.set(id, slug)
+    }
+    for (let [id, slug] of idOrder) {
+        if (seen.has(id)) continue
+        seen.add(id)
+        let idx = html.indexOf('/title/' + slug)
+        let block = idx < 0 ? slug : html.substring(Math.max(0, idx - 200), idx + 600)
+        let titleM = block.match(/alt="([^"]*)"[^>]*title="([^"]*)"/) || block.match(/title-row-card__title[^>]*>([^<]+)</) || block.match(/alt="([^"]*?)"/)
+        let title = titleM?.[2] || titleM?.[1] || slug
+        let imgM = block.match(/<img[^>]*src="([^"]*?)"[^>]*>/)
         let img = imgM ? imgM[1] : ""
         out.push({ id: slug, title, image: img, synonyms: [] })
     }
@@ -50,7 +54,8 @@ class Provider {
         let page = 1
 
         while (true) {
-            let url = base + "/browse?keyword=" + encodeURIComponent(opts.query) + "&sort=relevance:desc"
+            let q = opts.query.replace(/[:\-]/g, " ")
+            let url = base + "/browse?keyword=" + encodeURIComponent(q) + "&sort=relevance:desc"
             if (page > 1) url += "&page=" + page
             let { body: html } = await bypassFetch(url, 30000, 15000)
             if (!html) break
