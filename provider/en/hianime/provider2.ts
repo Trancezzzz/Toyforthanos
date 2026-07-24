@@ -1,6 +1,9 @@
 /// <reference path="./online-streaming-provider.d.ts" />
 
+let _loaded = false
+
 class Provider {
+    constructor() { if (!_loaded) { _loaded = true; console.log("[hianime] loaded") } }
     base = "https://hianime.ms"
 
     _uas = [
@@ -46,11 +49,13 @@ class Provider {
     }
 
     async _scrapeEpisodeData(episodeUrl: string): Promise<{ anilistId: string, streamToken: string }> {
+        console.log("[hianime] scrape:", episodeUrl.substring(0, 60))
         let res = await fetch(episodeUrl, { headers: this._headers(this.base) })
-        if (!res.ok) return { anilistId: "", streamToken: "" }
+        if (!res.ok) { console.log("[hianime] scrape fail:", res.status); return { anilistId: "", streamToken: "" } }
         let html = await res.text()
         let aniM = html.match(/var anilistId\s*=\s*(\d+)/)
         let tokenM = html.match(/data-stream-token="([^"]+)"/)
+        console.log("[hianime] scrape anilistId:", aniM ? aniM[1] : "no", "token:", tokenM ? "yes" : "no")
         return { anilistId: aniM ? aniM[1] : "", streamToken: tokenM ? tokenM[1] : "" }
     }
 
@@ -76,6 +81,7 @@ class Provider {
     }
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
+        console.log("[hianime] search:", opts.query)
         if (!opts.query.trim()) return []
         let res = await fetch(this._url("/search?q=" + encodeURIComponent(opts.query)), { headers: this._headers(this.base) })
         if (!res.ok) return []
@@ -96,11 +102,13 @@ class Provider {
                 })
             }
         }
+        console.log("[hianime] search results:", results.length)
         return results
     }
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
         let { name, animeId } = this._extractSlug(id)
+        console.log("[hianime] findEpisodes:", name, animeId)
         if (!name) return []
         let ep1Url = this._url("/watch-" + name + "-episode-1-" + animeId)
         let res = await fetch(ep1Url, { headers: this._headers(this.base) })
@@ -127,10 +135,12 @@ class Provider {
             }
         }
         episodes.sort(function (a, b) { return a.number - b.number })
+        console.log("[hianime] episodes:", episodes.length, episodes[0] ? episodes[0].number + "-" + episodes[episodes.length - 1].number : "none")
         return episodes
     }
 
     async findEpisodeServer(episode: EpisodeDetails, server: string): Promise<EpisodeServer> {
+        console.log("[hianime] findEpisodeServer ep:", episode.number, "server:", server)
         let url = ""
         let version = episode.subOrDub === "dub" ? "dub" : "sub"
         let key = this._serverKey(server)
@@ -147,13 +157,16 @@ class Provider {
 
         if (!url) {
             let epId = this._tokenToEpisodeId(data.streamToken)
-            if (epId) url = "https://megaplay.buzz/stream/s-2/" + epId + "/" + version
+            if (epId) { url = "https://megaplay.buzz/stream/s-2/" + epId + "/" + version; console.log("[hianime] ryu fallback") }
+            else console.log("[hianime] no token for ryu")
         }
 
         if (!url) {
+            console.log("[hianime] fallback to episode URL")
             return { server: server, headers: this._headers(episode.url), videoSources: [{ url: episode.url, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
+        console.log("[hianime] return URL:", url.substring(0, 60))
         return { server: server, headers: this._headers(sr), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
     }
 }
