@@ -1,0 +1,13 @@
+{
+  "id": "bypass",
+  "name": "Bypass",
+  "description": "Browser-context HTTP proxy — real TLS, real WebGL, Turnstile-capable. Uses Seanime's Electron browser via webview to make requests that pass Cloudflare checks.",
+  "version": "1.0.0",
+  "author": "Trancezzz",
+  "type": "plugin",
+  "language": "typescript",
+  "permissions": [
+    "storage",
+    "network"
+  ]
+}

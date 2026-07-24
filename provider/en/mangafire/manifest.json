@@ -1,0 +1,14 @@
+{
+  "id": "mangafire",
+  "name": "MangaFire",
+  "description": "MangaFire.to manga provider — routes through bypassd stealth browser for Cloudflare bypass.",
+  "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/mangafire/manifest.json",
+  "version": "1.0.0",
+  "author": "Trancezzz",
+  "type": "manga-provider",
+  "language": "typescript",
+  "lang": "en",
+  "icon": "https://mangafire.to/favicon.ico",
+  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/mangafire/provider.ts",
+  "isDevelopment": false
+}
