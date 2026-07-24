@@ -13,13 +13,6 @@ class Provider {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     ]
 
-    _serverReferers: Record<string, string> = {
-        ryu: "https://megaplay.buzz/",
-        volt: "https://vidnest.fun/",
-        warp: "https://tryembed.us.cc/",
-        ayame: "https://vidnest.fun/",
-    }
-
     _rand<T>(arr: T[]): T {
         return arr[Math.floor(Math.random() * arr.length)]
     }
@@ -28,8 +21,6 @@ class Provider {
         return {
             "User-Agent": this._rand(this._uas),
             Referer: referer,
-            Accept: "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
             "X-Requested-With": "XMLHttpRequest",
         }
     }
@@ -53,23 +44,33 @@ class Provider {
         return this._b64decode(token).split(":")[0]
     }
 
-    _serverKey(server: string): string {
-        let s = server.toLowerCase()
-        if (s.indexOf("volt") !== -1) return "volt"
-        if (s.indexOf("warp") !== -1) return "warp"
-        if (s.indexOf("ayame") !== -1) return "ayame"
-        return "ryu"
+    _parseM3u8(body: string, baseUrl: string): VideoSource[] {
+        let sources: VideoSource[] = []
+        let lines = body.split(/\r?\n/)
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i].trim()
+            if (line.indexOf("#EXT-X-STREAM-INF:") === -1) continue
+            let nameM = line.match(/NAME="([^"]+)"/)
+            let quality = nameM ? nameM[1] : "auto"
+            let next = i + 1
+            while (next < lines.length && lines[next].trim() === "") next++
+            if (next < lines.length) {
+                let url = lines[next].trim()
+                if (url.indexOf("http") !== 0) {
+                    let sep = baseUrl.lastIndexOf("/")
+                    url = baseUrl.substring(0, sep + 1) + url
+                }
+                sources.push({ url, quality, type: "hls", subtitles: [] })
+            }
+        }
+        return sources
     }
 
     getSettings(): Settings {
-        return {
-            episodeServers: ["Ryu"],
-            supportsDub: true,
-        }
+        return { episodeServers: ["Ryu"], supportsDub: true }
     }
 
     async search(opts: SearchOptions): Promise<SearchResult[]> {
-        console.log("[hianime] search:", opts.query)
         if (!opts.query.trim()) return []
         let res = await fetch(this.base + "/search?q=" + encodeURIComponent(opts.query), { headers: this._headers(this.base) })
         if (!res.ok) return []
@@ -90,17 +91,15 @@ class Provider {
                 })
             }
         }
-        console.log("[hianime] search results:", results.length)
         return results
     }
 
     async findEpisodes(id: string): Promise<EpisodeDetails[]> {
         let { name, animeId } = this._extractSlug(id)
-        console.log("[hianime] findEpisodes:", name, animeId)
         if (!name) return []
         let url = this.base + "/watch-" + name + "-episode-1-" + animeId
         let res = await fetch(url, { headers: this._headers(this.base) })
-        if (!res.ok) { console.log("[hianime] watch fail:", res.status); return [] }
+        if (!res.ok) return []
         let html = await res.text()
         let episodes: EpisodeDetails[] = []
         let rx = /<a[\s\S]*?class="ws-ep[^"]*"[\s\S]*?<\/a>/g
@@ -128,103 +127,44 @@ class Provider {
         return episodes
     }
 
-    _parseM3u8(body: string, baseUrl: string): VideoSource[] {
-        let sources: VideoSource[] = []
-        let lines = body.split(/\r?\n/)
-        for (let i = 0; i < lines.length; i++) {
-            let line = lines[i].trim()
-            if (line.indexOf("#EXT-X-STREAM-INF:") !== -1) {
-                let nameM = line.match(/NAME="([^"]+)"/)
-                let quality = nameM ? nameM[1] : "auto"
-                let next = i + 1
-                while (next < lines.length && lines[next].trim() === "") next++
-                if (next < lines.length) {
-                    let url = lines[next].trim()
-                    if (url.indexOf("http") !== 0) {
-                        let sep = baseUrl.lastIndexOf("/")
-                        url = baseUrl.substring(0, sep + 1) + url
-                    }
-                    sources.push({ url: url, quality: quality, type: "hls", subtitles: [] })
-                }
-            }
-        }
-        return sources
-    }
-
-    async _fetchM3u8(url: string, referer: string): Promise<{ sources: VideoSource[], masterUrl: string }> {
-        let res = await fetch(url, { headers: this._headers(referer), redirect: "follow" })
-        if (!res.ok) { console.log("[hianime] m3u8 fail:", res.status); return { sources: [], masterUrl: url } }
-        let finalUrl = res.url || url
-        let body = await res.text()
-        if (body.indexOf("#EXTM3U") !== -1) {
-            let sources = this._parseM3u8(body, finalUrl)
-            if (sources.length > 0) return { sources, masterUrl: finalUrl }
-        }
-        return { sources: [], masterUrl: finalUrl }
-    }
-
-    async _scrapeWatchPage(episodeUrl: string): Promise<string> {
-        console.log("[hianime] fetch:", episodeUrl.substring(0, 80))
-        let res = await fetch(episodeUrl, { headers: this._headers(this.base) })
-        if (!res.ok) { console.log("[hianime] fetch fail:", res.status); return "" }
-        let html = await res.text()
-        console.log("[hianime] fetch ok, length:", html.length)
-        return html
-    }
-
     async findEpisodeServer(episode: EpisodeDetails, server: string): Promise<EpisodeServer> {
-        console.log("[hianime] findEpisodeServer ep:", episode.number, "server:", server)
+        let sr = "https://megaplay.buzz/"
         let version = episode.subOrDub === "dub" ? "dub" : "sub"
-        let key = this._serverKey(server)
-        let sr = this._serverReferers[key] || "https://megaplay.buzz/"
-        let html = await this._scrapeWatchPage(episode.url)
-        console.log("[hianime] html token search:", html.indexOf("data-stream-token") !== -1 ? "found" : "NOT FOUND")
-        let aniM = html.match(/var anilistId\s*=\s*(\d+)/)
+        let html = await (await fetch(episode.url, { headers: this._headers(this.base) })).text()
         let tokenM = html.match(/data-stream-token="([^"]+)"/)
-        console.log("[hianime] aniM:", aniM ? aniM[1] : "null", "tokenM:", tokenM ? tokenM[1].substring(0,10)+"..." : "null")
+        let realId = this._tokenToEpisodeId(tokenM ? tokenM[1] : "")
+        if (!realId) throw new Error("No stream token")
 
-        // Ryu — two-step: backup URL → data-id → getSourcesNew
-        let rawToken = tokenM ? tokenM[1] : ""
-        let realId = this._tokenToEpisodeId(rawToken)
-        console.log("[hianime] ryu realId:", realId)
-        if (realId) {
-            let backupUrl = "https://megaplay.buzz/stream/s-2/" + realId + "/" + version
-            console.log("[hianime] ryu backup URL:", backupUrl)
-            let br = await fetch(backupUrl, { headers: this._headers(sr) })
-            if (br.ok) {
-                let bhtml = await br.text()
-                let didM = bhtml.match(/data-id="(\d+)"/)
-                let dataId = didM ? didM[1] : ""
-                console.log("[hianime] ryu data-id from backup:", dataId)
-                if (dataId) {
-                    let apiUrl = "https://megaplay.buzz/stream/getSourcesNew?id=" + dataId + "&id=" + dataId
-                    console.log("[hianime] ryu getSourcesNew URL:", apiUrl)
-                    let res = await fetch(apiUrl, { headers: this._headers(sr) })
-                    console.log("[hianime] ryu getSourcesNew status:", res.status)
-                    if (res.ok) {
-                        let text = await res.text()
-                        let json = JSON.parse(text)
-                        let masterUrl = json.sources && json.sources.file
-                        let subs: { url: string, lang: string }[] = []
-                        if (json.tracks) {
-                            for (let t of json.tracks) {
-                                if (t.file) subs.push({ url: t.file, lang: t.label || "English" })
-                            }
-                        }
-                        if (masterUrl) {
-                            let m3u8Result = await this._fetchM3u8(masterUrl, sr)
-                            if (m3u8Result.sources.length > 0) {
-                                for (let s of m3u8Result.sources) s.subtitles = subs
-                                return { server, headers: this._headers(sr), videoSources: m3u8Result.sources }
-                            }
-                            return { server, headers: this._headers(sr), videoSources: [{ url: masterUrl, quality: "auto", type: "hls", subtitles: subs }] }
-                        }
-                    }
-                }
+        let br = await fetch("https://megaplay.buzz/stream/s-2/" + realId + "/" + version, { headers: this._headers(sr) })
+        if (!br.ok) throw new Error("Backup URL failed: " + br.status)
+        let didM = (await br.text()).match(/data-id="(\d+)"/)
+        let dataId = didM ? didM[1] : ""
+        if (!dataId) throw new Error("No data-id in backup")
+
+        let res = await fetch("https://megaplay.buzz/stream/getSourcesNew?id=" + dataId + "&id=" + dataId, { headers: this._headers(sr) })
+        if (!res.ok) throw new Error("getSourcesNew failed: " + res.status)
+        let json = JSON.parse(await res.text())
+        let masterUrl = json.sources && json.sources.file
+        if (!masterUrl) throw new Error("No master URL in JSON")
+
+        let subs: { url: string, lang: string }[] = []
+        if (json.tracks) {
+            for (let t of json.tracks) {
+                if (t.file) subs.push({ url: t.file, lang: t.label || "English" })
             }
         }
 
-        console.log("[hianime] fallback to episode URL")
-        return { server, headers: this._headers(episode.url), videoSources: [{ url: episode.url, quality: "auto", type: "unknown", subtitles: [] }] }
+        let m3u8Res = await fetch(masterUrl, { headers: this._headers(sr), redirect: "follow" })
+        if (m3u8Res.ok) {
+            let body = await m3u8Res.text()
+            if (body.indexOf("#EXTM3U") !== -1) {
+                let sources = this._parseM3u8(body, m3u8Res.url || masterUrl)
+                if (sources.length > 0) {
+                    for (let s of sources) s.subtitles = subs
+                    return { server, headers: this._headers(sr), videoSources: sources }
+                }
+            }
+        }
+        return { server, headers: this._headers(sr), videoSources: [{ url: masterUrl, quality: "auto", type: "hls", subtitles: subs }] }
     }
 }
