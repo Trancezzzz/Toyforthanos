@@ -110,27 +110,26 @@ class Provider {
         let { name, animeId } = this._extractSlug(id)
         console.log("[hianime] findEpisodes:", name, animeId)
         if (!name) return []
-        let ep1Url = this.base + "/watch-" + name + "-episode-1-" + animeId
-        console.log("[hianime] watch:", ep1Url)
-        let res = await fetch(ep1Url, { headers: this._headers(this.base) })
-        if (!res.ok) { console.log("[hianime] watch fail:", res.status); return [] }
+        let detailUrl = this.base + "/details/" + name + "-" + animeId
+        console.log("[hianime] detail:", detailUrl)
+        let res = await fetch(detailUrl, { headers: this._headers(this.base) })
+        if (!res.ok) { console.log("[hianime] detail fail:", res.status); return [] }
         let html = await res.text()
         let episodes: EpisodeDetails[] = []
-        let epRx = /<a[\s\S]*?class="ws-ep[^"]*"[\s\S]*?<\/a>/g
+        let epRx = /<a[\s\S]*?class="[^"]*ep-item[^"]*"[\s\S]*?<\/a>/g
         let m
         while ((m = epRx.exec(html)) !== null) {
             let block = m[0]
-            let numM = block.match(/data-episode="(\d+)"/)
-            let tokenM = block.match(/data-stream-token="([^"]+)"/)
-            let urlM = block.match(/data-url="([^"]+)"/)
-            let titleM = block.match(/aria-label="([^"]+)"/)
-            if (numM && tokenM) {
+            let numM = block.match(/data-number="(\d+)"/)
+            let epIdM = block.match(/data-id="([^"]+)"/)
+            let titleM = block.match(/title="([^"]+)"/)
+            if (numM && epIdM) {
                 let num = parseInt(numM[1], 10)
                 if (!episodes.some(function (e) { return e.number === num })) {
                     episodes.push({
-                        id: tokenM[1],
+                        id: epIdM[1],
                         number: num,
-                        url: urlM ? (urlM[1].indexOf("http") === 0 ? urlM[1] : this.base + urlM[1]) : ep1Url,
+                        url: this.base + "/watch-" + name + "-episode-" + num + "-" + animeId,
                         title: titleM ? titleM[1] : "Episode " + num,
                     })
                 }
@@ -204,10 +203,9 @@ class Provider {
             return { server: server, headers: this._headers(sr), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
-        // Ryu — use getSourcesNew JSON API
-        let epId = this._tokenToEpisodeId(data.streamToken)
-        if (epId) {
-            let apiUrl = "https://megaplay.buzz/stream/getSourcesNew?id=" + epId + "&id=" + epId
+        // Ryu — use getSourcesNew JSON API with episode.id directly
+        if (episode.id) {
+            let apiUrl = "https://megaplay.buzz/stream/getSourcesNew?id=" + episode.id + "&id=" + episode.id
             console.log("[hianime] ryu API:", apiUrl)
             let res = await fetch(apiUrl, { headers: this._headers(sr) })
             if (res.ok) {
