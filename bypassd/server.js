@@ -105,10 +105,17 @@ async function handleSolve(reqBody) {
       if (ct.includes('json')) {
         try {
           const json = await resp.json();
-          const key = url.split('?')[0];
-          apiResponses[key] = json;
-          const summary = json?.items ? `items:${json.items.length}` : json?.data?.chapters ? `chapters:${json.data.chapters.length}` : json?.data?.pages ? `pages:${json.data.pages.length}` : json?.data?.titles ? `titles:${json.data.titles.length}`:'ok';
-          consoleLogs.push(`[CAPTURE] ${resp.status()} ${key.slice(0, 120)} ${summary}`);
+          const u = new URL(url);
+          const base = u.origin + u.pathname;
+          // Keep the full original URL so paginated APIs (different query params)
+          // each get their own key. For non-verbose logging, shorten the display.
+          apiResponses[url] = json;
+          // Also index by slug for aggregate retrieval
+          if (!apiResponses.__byBase) apiResponses.__byBase = {};
+          if (!apiResponses.__byBase[base]) apiResponses.__byBase[base] = [];
+          apiResponses.__byBase[base].push(json);
+          const summary = json?.items ? `items:${json.items.length}` : json?.data?.chapters ? `chapters:${json.data.chapters.length}` : json?.data?.pages && Array.isArray(json.data.pages) ? `pages:${json.data.pages.length}` : json?.data?.titles ? `titles:${json.data.titles.length}`:'ok';
+          consoleLogs.push(`[CAPTURE] ${resp.status()} ${base.slice(0, 120)} ${summary}`);
         } catch {}
       }
     });
@@ -141,7 +148,7 @@ async function handleSolve(reqBody) {
       const slug = new URL(target).pathname.replace('/title/', '').split('/')[0];
       for (let attempt = 0; attempt < 20; attempt++) {
         const beforeCount = Object.keys(apiResponses).filter(k => k.includes('/chapters')).length;
-        const beforeRows = await page.evaluate(() => document.querySelectorAll('.title-detail__row, [class*="chapter-row"], tbody tr, .chapters-list > *').length);
+        const beforeRows = await page.evaluate(() => document.querySelectorAll('.title-detail__row, .title-detail__chapters > *, [class*="chapter-row"], [class*="chapter-item"], tbody tr, .chapters-list > *').length);
 
         // Phase 1: Aggressive scroll of ALL scrollable containers
         await page.evaluate(async () => {
@@ -191,7 +198,14 @@ async function handleSolve(reqBody) {
         }
 
         // Phase 3: Click any interactive load triggers
-        await page.evaluate(() => {
+        await page.evaluate(async () => {
+          // Numeric pagination buttons (e.g. MangaFire's npager__num)
+          const pageBtns = document.querySelectorAll('.npager__num:not(.is-active)');
+          for (const btn of pageBtns) {
+            btn.click();
+            await new Promise(r => setTimeout(r, 2000));
+          }
+          // Generic "load more" / "show all" buttons
           document.querySelectorAll('button, a, [role="button"]').forEach(b => {
             const t = (b.textContent || '').toLowerCase();
             if (t.includes('load') || t.includes('show') || t.includes('more') || t.includes('all') || t === '+')
