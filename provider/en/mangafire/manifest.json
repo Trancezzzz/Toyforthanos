@@ -3,7 +3,7 @@
   "name": "MangaFire",
   "description": "MangaFire.to manga provider — routes through bypassd stealth browser for Cloudflare bypass.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/mangafire/manifest.json",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "author": "Trancezzz",
   "type": "manga-provider",
   "language": "typescript",
