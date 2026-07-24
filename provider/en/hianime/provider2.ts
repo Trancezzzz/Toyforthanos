@@ -41,7 +41,24 @@ class Provider {
     }
 
     _b64decode(s: string): string {
-        try { return atob(s.replace(/-/g, "+").replace(/_/g, "/")) } catch (e) { return "" }
+        let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        s = s.replace(/-/g, "+").replace(/_/g, "/")
+        let out = ""
+        for (let i = 0; i < s.length; i += 4) {
+            let a = chars.indexOf(s[i] || "=")
+            let b = chars.indexOf(s[i + 1] || "=")
+            let c = chars.indexOf(s[i + 2] || "=")
+            let d = chars.indexOf(s[i + 3] || "=")
+            if (a < 0 || b < 0) break
+            out += String.fromCharCode((a << 2) | (b >> 4))
+            if (c >= 0 && s[i + 2] !== "=") {
+                out += String.fromCharCode(((b & 15) << 4) | (c >> 2))
+                if (d >= 0 && s[i + 3] !== "=") {
+                    out += String.fromCharCode(((c & 3) << 6) | d)
+                }
+            }
+        }
+        return out
     }
 
     _tokenToEpisodeId(token: string): string {
@@ -181,13 +198,6 @@ class Provider {
 
         // Ryu — two-step: backup URL → data-id → getSourcesNew
         let rawToken = tokenM ? tokenM[1] : ""
-        console.log("[hianime] ryu rawToken len:", rawToken.length, "val:", rawToken.substring(0, 15))
-        let atobTest = ""
-        try { atobTest = atob("MjkwODg6YjUxYjQ4MjY") } catch (e) { atobTest = "ERR:" + String(e) }
-        console.log("[hianime] ryu atob test:", atobTest)
-        let decoded = ""
-        try { decoded = atob(rawToken) } catch (e) { decoded = "ERR:" + String(e) }
-        console.log("[hianime] ryu atob raw:", decoded)
         let realId = this._tokenToEpisodeId(rawToken)
         console.log("[hianime] ryu realId:", realId)
         if (realId) {
