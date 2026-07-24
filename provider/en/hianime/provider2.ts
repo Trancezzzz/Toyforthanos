@@ -29,17 +29,14 @@ function parseM3u8(body: string, baseUrl: string): VideoSource[] {
     let out: VideoSource[] = []
     let lines = body.split(/\r?\n/)
     for (let i = 0; i < lines.length; i++) {
-        let line = lines[i].trim()
-        if (line.indexOf("#EXT-X-STREAM-INF:") === -1) continue
-        let q = (line.match(/NAME="([^"]+)"/) || [])[1] || "auto"
+        let tl = lines[i].trim()
+        if (tl.indexOf("#EXT-X-STREAM-INF:") === -1) continue
+        let q = (tl.match(/NAME="([^"]+)"/) || [])[1] || "auto"
         let n = i + 1
         while (n < lines.length && lines[n].trim() === "") n++
         if (n >= lines.length) continue
         let u = lines[n].trim()
-        if (u.indexOf("http") !== 0) {
-            let sep = baseUrl.lastIndexOf("/")
-            u = baseUrl.substring(0, sep + 1) + u
-        }
+        if (u.indexOf("http") !== 0) { let sep = baseUrl.lastIndexOf("/"); u = baseUrl.substring(0, sep + 1) + u }
         out.push({ url: u, quality: q, type: "hls", subtitles: [] })
     }
     return out
@@ -49,11 +46,7 @@ function getFile(json: any): string {
     if (!json || !json.sources) return ""
     let s = json.sources
     if (typeof s.file === "string") return s.file
-    if (Array.isArray(s)) {
-        for (let v of s) {
-            if (typeof v.file === "string") return v.file
-        }
-    }
+    if (Array.isArray(s)) for (let v of s) { if (typeof v.file === "string") return v.file }
     return ""
 }
 
@@ -72,18 +65,20 @@ class Provider {
         let out: SearchResult[] = []
         let parts = html.split('<div class="flw-item">')
         for (let i = 1; i < parts.length; i++) {
-            let linkM = parts[i].match(/href="https:\/\/hianime\.ms\/details\/([^"]+)"/)
-            let titleM = parts[i].match(/class="dynamic-name"[^>]*>([^<]+)</)
-            if (linkM && titleM) {
-                let sub = parts[i].indexOf("tick-sub") !== -1
-                let dub = parts[i].indexOf("tick-dub") !== -1
-                out.push({
-                    id: linkM[1],
-                    title: titleM[1].trim(),
-                    url: this.base + "/details/" + linkM[1],
-                    subOrDub: sub ? "sub" : (dub ? "dub" : "sub"),
-                })
-            }
+            let p = parts[i]
+            let linkM = p.match(/href="https:\/\/hianime\.ms\/details\/([^"]+)"/)
+            let titleM = p.match(/class="dynamic-name"[^>]*>([^<]+)</)
+            if (!linkM || !titleM) continue
+            let hasSub = p.indexOf("tick-sub") !== -1
+            let hasDub = p.indexOf("tick-dub") !== -1
+            if (opts.dub && !hasDub) continue
+            if (!opts.dub && !hasSub) continue
+            out.push({
+                id: linkM[1],
+                title: titleM[1].trim(),
+                url: this.base + "/details/" + linkM[1],
+                subOrDub: hasSub && hasDub ? "both" : (hasDub ? "dub" : "sub"),
+            })
         }
         return out
     }
@@ -122,14 +117,12 @@ class Provider {
 
     async findEpisodeServer(episode: EpisodeDetails, server: string): Promise<EpisodeServer> {
         let sr = "https://megaplay.buzz/"
-        let version = episode.subOrDub === "dub" ? "dub" : "sub"
-
         let html = await (await fetch(episode.url, { headers: headers(this.base) })).text()
         let tokenM = html.match(/data-stream-token="([^"]+)"/)
         let realId = tokenM ? b64decode(tokenM[1]).split(":")[0] : ""
         if (!realId) throw new Error("No stream token for ep " + episode.number)
 
-        let br = await fetch("https://megaplay.buzz/stream/s-2/" + realId + "/" + version, { headers: headers(sr) })
+        let br = await fetch("https://megaplay.buzz/stream/s-2/" + realId + "/" + ((episode as any).subOrDub === "dub" ? "dub" : "sub"), { headers: headers(sr) })
         if (!br.ok) throw new Error("Backup failed for ep " + episode.number + ": " + br.status)
         let didM = (await br.text()).match(/data-id="(\d+)"/)
         let dataId = didM ? didM[1] : ""
@@ -141,11 +134,10 @@ class Provider {
         let masterUrl = getFile(json)
         if (!masterUrl) throw new Error("No source for ep " + episode.number)
 
-        let subs: { url: string; lang: string }[] = []
-        if (json.tracks) {
-            for (let t of json.tracks) {
-                if (t.file) subs.push({ url: t.file, lang: t.label || "English" })
-            }
+        let subs: VideoSubtitle[] = []
+        if (json.tracks) for (let i = 0; i < json.tracks.length; i++) {
+            let t = json.tracks[i]
+            if (t.file) subs.push({ id: "sub-" + i, url: t.file, language: t.label || "English", isDefault: i === 0 })
         }
 
         let m3u8Res = await fetch(masterUrl, { headers: headers(sr), redirect: "follow" })
