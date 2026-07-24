@@ -186,28 +186,44 @@ class Provider {
         }
 
         // Ryu -- decode stream token, call getSourcesNew
-        let epId = this._tokenToEpisodeId(tokenM ? tokenM[1] : "")
+        let rawToken = tokenM ? tokenM[1] : ""
+        console.log("[hianime] ryu rawToken:", rawToken)
+        let epId = this._tokenToEpisodeId(rawToken)
+        console.log("[hianime] ryu decoded epId:", epId)
         if (epId) {
             let apiUrl = "https://megaplay.buzz/stream/getSourcesNew?id=" + epId + "&id=" + epId
-            console.log("[hianime] ryu API:", apiUrl.substring(0, 80))
+            console.log("[hianime] ryu API URL:", apiUrl)
             let res = await fetch(apiUrl, { headers: this._headers(sr) })
+            console.log("[hianime] ryu API status:", res.status)
             if (res.ok) {
-                let json = await res.json()
+                let text = await res.text()
+                console.log("[hianime] ryu raw response:", text.substring(0, 500))
+                let json = JSON.parse(text)
                 let masterUrl = json.sources && json.sources.file
+                console.log("[hianime] ryu masterUrl:", masterUrl ? masterUrl.substring(0, 80) : "null")
                 let subs: { url: string, lang: string }[] = []
                 if (json.tracks) {
+                    console.log("[hianime] ryu tracks count:", json.tracks.length)
                     for (let t of json.tracks) {
                         if (t.file) subs.push({ url: t.file, lang: t.label || "English" })
                     }
+                    console.log("[hianime] ryu subs parsed:", subs.length)
                 }
                 if (masterUrl) {
+                    console.log("[hianime] ryu fetching m3u8:", masterUrl.substring(0, 80))
                     let m3u8Result = await this._fetchM3u8(masterUrl, sr)
+                    console.log("[hianime] ryu m3u8 result sources:", m3u8Result.sources.length)
                     if (m3u8Result.sources.length > 0) {
                         for (let s of m3u8Result.sources) s.subtitles = subs
                         return { server, headers: this._headers(sr), videoSources: m3u8Result.sources }
                     }
+                    console.log("[hianime] ryu no variants in m3u8, returning master URL")
                     return { server, headers: this._headers(sr), videoSources: [{ url: masterUrl, quality: "auto", type: "hls", subtitles: subs }] }
                 }
+                console.log("[hianime] ryu no masterUrl in JSON")
+            } else {
+                let body = await res.text()
+                console.log("[hianime] ryu API error body:", body.substring(0, 300))
             }
         }
 
