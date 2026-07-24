@@ -30,6 +30,7 @@ class Provider {
             Referer: referer,
             Accept: "*/*",
             "Accept-Language": "en-US,en;q=0.9",
+            "X-Requested-With": "XMLHttpRequest",
         }
     }
 
