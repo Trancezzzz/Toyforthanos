@@ -20,24 +20,47 @@ async function bypassFetch(url: string, timeoutMs = 30000, waitMs = 15000, loadM
 
 function extractSearchResults(html: string, seen: Set<string>): SearchResult[] {
     let out: SearchResult[] = []
-    let re = /<a[^>]*href="\/title\/([a-z0-9]+[^"\/]*)"/g
+    // First pass: find all title links in document order, collect unique slug
+    let linkRe = /<a[^>]*href="\/title\/([a-z0-9]+[^"\/]*)"/g
+    let links: { slug: string; idx: number; id: string }[] = []
     let m: RegExpExecArray | null
-    let idOrder = new Map<string, string>()
-    while ((m = re.exec(html)) !== null) {
+    while ((m = linkRe.exec(html)) !== null) {
         let slug = m[1]
         let id = slug.split("-")[0]
-        if (!idOrder.has(id)) idOrder.set(id, slug)
+        if (!seen.has(id)) {
+            links.push({ slug, idx: m.index, id })
+            seen.add(id)
+        }
     }
-    for (let [id, slug] of idOrder) {
-        if (seen.has(id)) continue
-        seen.add(id)
-        let idx = html.indexOf('/title/' + slug)
-        let block = idx < 0 ? slug : html.substring(Math.max(0, idx - 200), idx + 600)
-        let titleM = block.match(/alt="([^"]*)"[^>]*title="([^"]*)"/) || block.match(/title-row-card__title[^>]*>([^<]+)</) || block.match(/alt="([^"]*?)"/)
-        let title = titleM?.[2] || titleM?.[1] || slug
-        let imgM = block.match(/<img[^>]*src="([^"]*?)"[^>]*>/)
-        let img = imgM ? imgM[1] : ""
-        out.push({ id: slug, title, image: img, synonyms: [] })
+
+    for (let link of links) {
+        let slug = link.slug
+        let idx = link.idx
+
+        // Look backward from the link to find the nearest <img alt="...">
+        let before = html.substring(Math.max(0, idx - 1500), idx)
+        let lastAlt = ""
+        let imgRe = /<img[^>]*alt="([^"]*?)"[^>]*>/g
+        let im: RegExpExecArray | null
+        while ((im = imgRe.exec(before)) !== null) {
+            if (im[1]) lastAlt = im[1]
+        }
+
+        // Look forward for a title element inside a heading or known class
+        let after = html.substring(idx, idx + 500)
+        let titleEl = after.match(/title-row-card__title[^>]*>([^<]+)</) ||
+                      after.match(/<h[1-4][^>]*>([^<]+)</) ||
+                      after.match(/card-title[^>]*>([^<]+)</) ||
+                      after.match(/"title"[^>]*>([^<]+)</)
+
+        let title = titleEl ? titleEl[1] : (lastAlt || slug)
+
+        // Find nearest image src
+        let imgSrc = ""
+        let imgS = (before + after.substring(0, 200)).match(/<img[^>]*src="([^"]*?)"[^>]*>/)
+        if (imgS) imgSrc = imgS[1]
+
+        out.push({ id: slug, title: title || slug, image: imgSrc, synonyms: [] })
     }
     return out
 }
