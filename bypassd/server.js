@@ -101,13 +101,14 @@ async function handleSolve(reqBody) {
       if (ct.includes('json') || ct.includes('javascript')) {
         consoleLogs.push(`[API] ${resp.status()} ${url.slice(0, 200)}`);
       }
-      // Capture chapter API responses (image data)
-      if (url.includes('/api/chapters/') && ct.includes('json')) {
+      // Capture MangaFire API responses (chapters list + chapter pages)
+      if (url.includes('/api/') && ct.includes('json')) {
         try {
           const json = await resp.json();
           const key = url.split('?')[0];
           apiResponses[key] = json;
-          consoleLogs.push(`[CAPTURE] chapter API: ${Object.keys(json).length > 0 ? Object.keys(json).slice(0, 5).join(',') : 'data captured'}`);
+          const summary = json?.data?.chapters ? `chapters:${json.data.chapters.length}` : json?.data?.pages ? `pages:${json.data.pages.length}` : 'ok';
+          consoleLogs.push(`[CAPTURE] ${key.slice(0, 80)} ${summary}`);
         } catch {}
       }
     });
@@ -133,6 +134,32 @@ async function handleSolve(reqBody) {
         }
         window.scrollTo(0, 0);
       });
+    }
+
+    // Load more content: scroll chapter list or click load-more buttons
+    if (reqBody.loadMore) {
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const beforeCount = Object.keys(apiResponses).filter(k => k.includes('/chapters')).length;
+        await page.evaluate(() => {
+          // Click any "load more" buttons
+          document.querySelectorAll('button').forEach(b => {
+            if (b.textContent?.toLowerCase().includes('load') || b.textContent?.toLowerCase().includes('show') || b.textContent?.toLowerCase().includes('more'))
+              b.click();
+          });
+          // Scroll chapter list container
+          const list = document.querySelector('.title-detail__list');
+          if (list) { list.scrollTop = list.scrollHeight; }
+          window.scrollTo(0, document.body.scrollHeight);
+        });
+        await new Promise(r => setTimeout(r, 1000));
+        const afterCount = Object.keys(apiResponses).filter(k => k.includes('/chapters')).length;
+        if (afterCount > beforeCount) {
+          consoleLogs.push(`[LOADMORE] attempt ${attempt}: captured new chapter page`);
+        } else {
+          consoleLogs.push(`[LOADMORE] no more chapter pages after ${attempt} attempts`);
+          break;
+        }
+      }
     }
 
     await page.evaluate(() => new Promise(r => {
