@@ -41,24 +41,11 @@ class Provider {
     }
 
     _b64decode(s: string): string {
-        let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        s = s.replace(/-/g, "+").replace(/_/g, "/")
-        let out = ""
-        for (let i = 0; i < s.length; i += 4) {
-            let a = chars.indexOf(s[i] || "=")
-            let b = chars.indexOf(s[i + 1] || "=")
-            let c = chars.indexOf(s[i + 2] || "=")
-            let d = chars.indexOf(s[i + 3] || "=")
-            if (a < 0 || b < 0) break
-            out += String.fromCharCode((a << 2) | (b >> 4))
-            if (c >= 0 && s[i + 2] !== "=") {
-                out += String.fromCharCode(((b & 15) << 4) | (c >> 2))
-                if (d >= 0 && s[i + 3] !== "=") {
-                    out += String.fromCharCode(((c & 3) << 6) | d)
-                }
-            }
-        }
-        return out
+        try {
+            let b = s.replace(/-/g, "+").replace(/_/g, "/")
+            while (b.length % 4 !== 0) b += "="
+            return CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(b))
+        } catch (e) { return "" }
     }
 
     _tokenToEpisodeId(token: string): string {
