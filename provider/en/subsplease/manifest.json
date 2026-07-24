@@ -1,0 +1,14 @@
+{
+  "id": "subsplease",
+  "name": "SubsPlease",
+  "description": "SubsPlease.org anime torrent provider — clean API, no anti-bot.",
+  "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/subsplease/manifest.json",
+  "version": "1.0.0",
+  "author": "Trancezzz",
+  "type": "anime-torrent-provider",
+  "language": "typescript",
+  "lang": "en",
+  "icon": "https://subsplease.org/favicon.ico",
+  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/subsplease/provider.ts",
+  "isDevelopment": false
+}

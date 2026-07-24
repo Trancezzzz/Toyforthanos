@@ -1,0 +1,14 @@
+{
+  "id": "mangadex",
+  "name": "MangaDex",
+  "description": "MangaDex.org manga provider — official API, no anti-bot, multi-language.",
+  "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/mangadex/manifest.json",
+  "version": "1.0.0",
+  "author": "Trancezzz",
+  "type": "manga-provider",
+  "language": "typescript",
+  "lang": "en",
+  "icon": "https://mangadex.org/favicon.ico",
+  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/mangadex/provider.ts",
+  "isDevelopment": false
+}
