@@ -7,11 +7,11 @@ function log(...args: any[]) {
     try { console.log("[MangaFire]", ...args) } catch {}
 }
 
-async function bypassFetch(url: string, timeoutMs = 30000, waitMs = 15000, loadMore = false): Promise<{ body: string; api: any }> {
+async function bypassFetch(url: string, timeoutMs = 30000, waitMs = 15000, loadMore = false, scroll = true): Promise<{ body: string; api: any }> {
     let res = await fetch(bypass, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, timeoutMs, waitMs, loadMore }),
+        body: JSON.stringify({ url, timeoutMs, waitMs, loadMore, scroll }),
     })
     if (!res.ok) return { body: "", api: null }
     let json = await res.json()
@@ -74,19 +74,31 @@ class Provider {
         log("search:", opts.query)
         let seen = new Set<string>()
         let all: SearchResult[] = []
-        let page = 1
+        let q = opts.query.replace(/[:\-]/g, " ")
+        let qLower = q.toLowerCase()
+        let maxPages = 2
 
-        while (true) {
-            let q = opts.query.replace(/[:\-]/g, " ")
+        for (let page = 1; page <= maxPages; page++) {
             let url = base + "/browse?keyword=" + encodeURIComponent(q) + "&sort=relevance:desc"
             if (page > 1) url += "&page=" + page
-            let { body: html } = await bypassFetch(url, 30000, 15000)
+            let { body: html } = await bypassFetch(url, 15000, 5000, false, false)
             if (!html) break
 
             let results = extractSearchResults(html, seen)
             if (results.length === 0) break
             for (let r of results) all.push(r)
 
+            // Stop if we found an exact title match on page 1
+            if (page === 1) {
+                for (let r of results) {
+                    if (r.title.toLowerCase() === qLower || r.id.replace(/-/g, " ") === qLower) {
+                        log("early exit: exact match found")
+                        return all
+                    }
+                }
+            }
+
+            // Check if more pages exist
             let npager = html.match(/npager__num[^>]*>(\d+)<\/button>/g)
             let lastPage = 1
             if (npager) {
@@ -96,7 +108,6 @@ class Provider {
                 }
             }
             if (page >= lastPage) break
-            page++
         }
 
         log("search results:", all.length)
