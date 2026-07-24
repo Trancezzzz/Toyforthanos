@@ -9,16 +9,42 @@
  *   BYPASSD_PORT=9191 node server.js
  *
  * Endpoints:
- *   POST /solve    { url, method?, headers?, body? } -> { status, body, headers, cookies }
+ *   POST /solve    { url, method?, headers?, body? } -> { status, body, headers, cookies, api, logs }
  *   POST /turnstile { url, timeoutMs? }              -> { solved, cookies }
+ *   POST /crypt     { action:encrypt|decrypt, data, iv?, tag?, key? } -> { ok, data|iv|tag|data }
  *   POST /health                                       -> { ok }
  */
 
 const { launchBrowser, newStealthPage, solveTurnstile, closeBrowser } = require('./driver.js');
 const http = require('http');
 const url = require('url');
+const crypto = require('crypto');
 
 const PORT = parseInt(process.env.BYPASSD_PORT || '8191', 10);
+const ENC_KEY = Buffer.from((process.env.BYPASSD_KEY || 'this-is-a-32byte-dev-key-for-bypa').padEnd(32, '!'), 'utf8').subarray(0, 32); // exactly 32 bytes for AES-256
+
+// ─── AES-256-GCM ───────────────────────────────────────────────────────────
+
+function encryptAESGCM(plaintext, key = ENC_KEY) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    iv: iv.toString('base64url'),
+    tag: tag.toString('base64url'),
+    data: encrypted.toString('base64url'),
+  };
+}
+
+function decryptAESGCM(payload, key = ENC_KEY) {
+  const iv = Buffer.from(payload.iv, 'base64url');
+  const tag = Buffer.from(payload.tag, 'base64url');
+  const encrypted = Buffer.from(payload.data, 'base64url');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return decipher.update(encrypted) + decipher.final('utf8');
+}
 
 let browser = null;
 let busy = false;
@@ -62,16 +88,27 @@ async function handleSolve(reqBody) {
 
     // Log browser console for diagnostics
     let consoleLogs = [];
+    let apiResponses = {};
     page.on('console', msg => {
       consoleLogs.push(`[${msg.type()}] ${msg.text()}`);
     });
     page.on('requestfailed', req => {
       consoleLogs.push(`[FAIL] ${req.resourceType()} ${req.url()} ${req.failure()?.errorText || ''}`);
     });
-    page.on('response', resp => {
+    page.on('response', async resp => {
       const ct = resp.headers()['content-type'] || '';
+      const url = resp.url();
       if (ct.includes('json') || ct.includes('javascript')) {
-        consoleLogs.push(`[API] ${resp.status()} ${resp.url().slice(0, 200)}`);
+        consoleLogs.push(`[API] ${resp.status()} ${url.slice(0, 200)}`);
+      }
+      // Capture chapter API responses (image data)
+      if (url.includes('/api/chapters/') && ct.includes('json')) {
+        try {
+          const json = await resp.json();
+          const key = url.split('?')[0];
+          apiResponses[key] = json;
+          consoleLogs.push(`[CAPTURE] chapter API: ${Object.keys(json).length > 0 ? Object.keys(json).slice(0, 5).join(',') : 'data captured'}`);
+        } catch {}
       }
     });
 
@@ -79,6 +116,24 @@ async function handleSolve(reqBody) {
 
     // Wait for SPA to render — hard delay + poll
     await new Promise(r => setTimeout(r, 3000));
+
+    // Scroll through page to trigger lazy loading
+    if (reqBody.scroll !== false) {
+      await page.evaluate(async () => {
+        const scrollHeight = () => Math.max(
+          document.documentElement.scrollHeight,
+          document.body.scrollHeight,
+          document.documentElement.clientHeight
+        );
+        const total = scrollHeight();
+        const step = Math.max(400, Math.floor(total / 20));
+        for (let y = 0; y < total; y += step) {
+          window.scrollTo(0, y);
+          await new Promise(r => setTimeout(r, 150));
+        }
+        window.scrollTo(0, 0);
+      });
+    }
 
     await page.evaluate(() => new Promise(r => {
       let tries = 0
@@ -94,6 +149,31 @@ async function handleSolve(reqBody) {
 
     const body = await page.evaluate(() => document.documentElement.outerHTML);
     const currentUrl = page.url();
+
+    // Try to decode MangaFire __config if present
+    let decodedConfig = null;
+    try {
+      decodedConfig = await page.evaluate(() => {
+        if (typeof window.__config !== 'string') return null;
+        // Try to find the decoder — MangaFire's SPA usually exposes it via internal functions
+        // Search for a function on window that takes a base64 string and returns something
+        const keys = Object.keys(window).filter(k =>
+          typeof window[k] === 'function' &&
+          window[k].toString().includes('base64') &&
+          window[k].toString().includes('fromCharCode')
+        );
+        // Try common decoder names
+        for (const name of ['decryptConfig', 'decodeConfig', '_dec', 'dC']) {
+          if (typeof window[name] === 'function') {
+            try { return window[name](window.__config); } catch {}
+          }
+        }
+        return null;
+      });
+    } catch {}
+    if (decodedConfig) {
+      apiResponses['__decoded_config'] = decodedConfig;
+    }
 
     const cookies = (await page.cookies()).map(c => `${c.name}=${c.value}`).join('; ');
 
@@ -115,6 +195,7 @@ async function handleSolve(reqBody) {
       cookies,
       url: currentUrl,
       logs: consoleLogs,
+      api: apiResponses,
     };
   } catch (err) {
     await page.close().catch(() => {});
@@ -202,6 +283,23 @@ const server = http.createServer(async (req, res) => {
       busy = false;
     }
     return;
+  }
+
+  if (req.method === 'POST' && parsed.pathname === '/crypt') {
+    try {
+      const body = await readBody(req);
+      if (body.action === 'encrypt') {
+        const result = encryptAESGCM(body.data, body.key ? Buffer.from(body.key, 'hex') : undefined);
+        return json(res, 200, { ok: true, ...result });
+      }
+      if (body.action === 'decrypt') {
+        const plain = decryptAESGCM(body, body.key ? Buffer.from(body.key, 'hex') : undefined);
+        return json(res, 200, { ok: true, data: plain });
+      }
+      return json(res, 400, { error: 'action must be encrypt or decrypt' });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
   }
 
   if (parsed.pathname === '/health' || parsed.pathname === '/') {

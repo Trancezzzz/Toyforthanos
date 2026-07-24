@@ -14,6 +14,17 @@ async function bypassFetch(url: string): Promise<string> {
     return json.body || ""
 }
 
+async function bypassFetchWithApi(url: string): Promise<{ body: string, api: any }> {
+    let res = await fetch(bypass, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, timeoutMs: 45000, waitMs: 25000 }),
+    })
+    if (!res.ok) return { body: "", api: null }
+    let json = await res.json()
+    return { body: json.body || "", api: json.api || null }
+}
+
 class Provider {
     getSettings(): Settings {
         return { supportsMultiLanguage: true, supportsMultiScanlator: false }
@@ -78,29 +89,29 @@ class Provider {
 
     async findChapterPages(chapterId: string): Promise<ChapterPage[]> {
         let url = base + "/title/" + chapterId
-        let html = await bypassFetch(url)
+        let { body: html, api } = await bypassFetchWithApi(url)
         if (!html) return []
 
         let images: string[] = []
 
-        let imgRe = /<img[^>]*src="(https:\/\/static\.mfcdn[^"]*)"[^>]*>/g
-        let m: RegExpExecArray | null
-        let seen = new Set<string>()
-        while ((m = imgRe.exec(html)) !== null) {
-            if (!seen.has(m[1])) { seen.add(m[1]); images.push(m[1]) }
-        }
-
-        let dataRe = /"images"\s*:\s*\[([^\]]+)\]/g
-        let dataM
-        while ((dataM = dataRe.exec(html)) !== null) {
-            let parts = dataM[1].split(",")
-            for (let p of parts) {
-                let clean = p.trim().replace(/^["'\s]+|["'\s]+$/g, "")
-                if (clean && clean.startsWith("http") && !seen.has(clean)) {
-                    seen.add(clean)
-                    images.push(clean)
+        // 1. Try API response first (captured from /api/chapters/ → data.pages[].url)
+        if (api) {
+            for (let key of Object.keys(api)) {
+                let d = api[key]?.data
+                if (d?.pages && Array.isArray(d.pages)) {
+                    for (let p of d.pages) {
+                        if (p.url && typeof p.url === "string" && p.url.startsWith("http"))
+                            images.push(p.url)
+                    }
                 }
             }
+        }
+
+        // 2. Fallback: HTML img tags
+        if (images.length === 0) {
+            let m: RegExpExecArray | null
+            let re = /<img[^>]*src="(https:\/\/[^"]*\.mfcdn[^"]*)"[^>]*>/g
+            while ((m = re.exec(html)) !== null) images.push(m[1])
         }
 
         let out: ChapterPage[] = []
