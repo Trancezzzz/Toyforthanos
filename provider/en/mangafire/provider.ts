@@ -3,10 +3,6 @@
 let bypass = "http://localhost:8191/solve"
 let base = "https://mangafire.to"
 
-function log(...args: any[]) {
-    try { console.log("[MangaFire]", ...args) } catch {}
-}
-
 async function bypassFetch(url: string, timeoutMs = 30000, waitMs = 15000, loadMore = false, scroll = true): Promise<{ body: string; api: any }> {
     let res = await fetch(bypass, {
         method: "POST",
@@ -110,7 +106,7 @@ class Provider {
     }
 
     async search(opts: QueryOptions): Promise<SearchResult[]> {
-        log("search:", opts.query)
+        console.log("[MangaFire]", "search:", opts.query)
         let seen = new Set<string>()
         let all: SearchResult[] = []
         let q = opts.query.replace(/[:\-]/g, " ")
@@ -131,11 +127,11 @@ class Provider {
             // Strategy 1: Try captured API responses first
             if (api) {
                 all = extractApiSearchResults(api, seen)
-                log("try:", url.slice(0, 80), "api found:", all.length)
+                console.log("[MangaFire]", "try:", url.slice(0, 80), "api found:", all.length)
                 if (all.length > 0) {
                     for (let r of all) {
                         if (r.title.toLowerCase() === qLower) {
-                            log("exact match from API:", r.title)
+                            console.log("[MangaFire]", "exact match from API:", r.title)
                             return all
                         }
                     }
@@ -146,11 +142,11 @@ class Provider {
             // Strategy 2: Fall back to HTML parsing of rendered SPA
             if (html) {
                 all = extractSearchResults(html, seen)
-                log("try:", url.slice(0, 80), "html found:", all.length)
+                console.log("[MangaFire]", "try:", url.slice(0, 80), "html found:", all.length)
                 if (all.length > 0) {
                     for (let r of all) {
                         if (r.title.toLowerCase() === qLower) {
-                            log("exact match from HTML:", r.title)
+                            console.log("[MangaFire]", "exact match from HTML:", r.title)
                             return all
                         }
                     }
@@ -159,24 +155,24 @@ class Provider {
             }
         }
 
-        log("final results:", all.length)
+        console.log("[MangaFire]", "final results:", all.length)
         return all
     }
 
     async findChapters(mangaId: string): Promise<ChapterDetails[]> {
-        log("findChapters:", mangaId)
+        console.log("[MangaFire]", "findChapters:", mangaId)
         let url = base + "/title/" + mangaId
         let { body: html, api } = await bypassFetch(url, 60000, 30000, true)
-        if (!html) { log("no HTML returned"); return [] }
+        if (!html) { console.log("[MangaFire]", "no HTML returned"); return [] }
 
-        log("API keys:", api ? Object.keys(api).join(", ") : "none")
+        console.log("[MangaFire]", "API keys:", api ? Object.keys(api).join(", ") : "none")
 
         let chMap = new Map<string, { id: number; number: number; name?: string; language?: string; date?: string }>()
 
         function addItems(items: any[], source: string) {
-            log("addItems from", source, "count:", items.length)
+            console.log("[MangaFire]", "addItems from", source, "count:", items.length)
             for (let i = 0; i < Math.min(items.length, 3); i++) {
-                log("  sample:", JSON.stringify(items[i]).slice(0, 120))
+                console.log("[MangaFire]", "  sample:", JSON.stringify(items[i]).slice(0, 120))
             }
             for (let item of items) {
                 let k = String(item.number || item.id || item.hid || "")
@@ -196,15 +192,15 @@ class Provider {
         if (api) {
             for (let key of Object.keys(api)) {
                 let pass = key.includes('/chapters') || key.includes('/volumes') || key === '__direct_chapters'
-                log("  api key:", key.slice(0, 80), "pass filter:", pass)
+                console.log("[MangaFire]", "  api key:", key.slice(0, 80), "pass filter:", pass)
                 if (!pass) continue
 
                 let d = api[key]
-                if (!d || typeof d !== "object") { log("  skipped: not object"); continue }
-                log("  structure:", JSON.stringify(Object.keys(d)).slice(0, 150))
+                if (!d || typeof d !== "object") { console.log("[MangaFire]", "  skipped: not object"); continue }
+                console.log("[MangaFire]", "  structure:", JSON.stringify(Object.keys(d)).slice(0, 150))
 
                 if (Array.isArray(d)) {
-                    log("  is array of", d.length)
+                    console.log("[MangaFire]", "  is array of", d.length)
                     for (let page of d) {
                         if (page?.items) addItems(page.items, key + "/items")
                         if (page?.data?.chapters) addItems(page.data.chapters, key + "/data.chapters")
@@ -223,7 +219,7 @@ class Provider {
                     }
                 }
                 if (d.chapters && Array.isArray(d.chapters)) { addItems(d.chapters, key + ".chapters"); continue }
-                log("  no matching chapter structure found for", key.slice(0, 60))
+                console.log("[MangaFire]", "  no matching chapter structure found for", key.slice(0, 60))
             }
         }
 
@@ -242,13 +238,13 @@ class Provider {
                     let k = m[2]
                     if (!chMap.has(k)) { chMap.set(k, { id: parseInt(m[1]), number: parseFloat(m[2]) }); count++ }
                 }
-                if (count > 0) { log("HTML added:", count, "new"); break }
+                if (count > 0) { console.log("[MangaFire]", "HTML added:", count, "new"); break }
             }
-            log("after HTML parse, total:", chMap.size, "from HTML:", chMap.size - beforeCount)
+            console.log("[MangaFire]", "after HTML parse, total:", chMap.size, "from HTML:", chMap.size - beforeCount)
         }
 
         if (chMap.size === 0) {
-            log("last resort: __remixContext")
+            console.log("[MangaFire]", "last resort: __remixContext")
             let scriptM = html.match(/<script[^>]*>window\.__remixContext\s*=\s*({[\s\S]*?})<\/script>/)
             if (scriptM) {
                 try {
@@ -264,11 +260,11 @@ class Provider {
                             }
                         }
                     }
-                } catch (e) { log("remixContext parse error:", String(e).slice(0, 100)) }
-            } else { log("no __remixContext found") }
+                } catch (e) { console.log("[MangaFire]", "remixContext parse error:", String(e).slice(0, 100)) }
+            } else { console.log("[MangaFire]", "no __remixContext found") }
         }
 
-        log("chMap size:", chMap.size)
+        console.log("[MangaFire]", "chMap size:", chMap.size)
 
         let chapters: ChapterDetails[] = []
         for (let [k, v] of chMap) {
@@ -285,12 +281,12 @@ class Provider {
 
         chapters.sort((a, b) => parseFloat(a.chapter) - parseFloat(b.chapter))
         for (let i = 0; i < chapters.length; i++) chapters[i].index = i
-        log("total chapters:", chapters.length)
+        console.log("[MangaFire]", "total chapters:", chapters.length)
         return chapters
     }
 
     async findChapterPages(chapterId: string): Promise<ChapterPage[]> {
-        log("findChapterPages:", chapterId)
+        console.log("[MangaFire]", "findChapterPages:", chapterId)
         let url = base + "/title/" + chapterId
         let { body: html, api } = await bypassFetch(url, 45000, 25000)
         if (!html) return []
@@ -316,7 +312,7 @@ class Provider {
             while ((m = re.exec(html)) !== null) images.push(m[1])
         }
 
-        log("chapter pages:", images.length)
+        console.log("[MangaFire]", "chapter pages:", images.length)
         let out: ChapterPage[] = []
         for (let i = 0; i < images.length; i++) {
             out.push({ url: images[i], index: i, headers: { Referer: base + "/" } })
