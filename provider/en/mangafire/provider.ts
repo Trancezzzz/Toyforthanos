@@ -88,33 +88,92 @@ class Provider {
 
         let chMap = new Map<string, { id: number; number: number; name?: string; language?: string; date?: string }>()
 
-        if (api) {
-            for (let key of Object.keys(api)) {
-                let d = api[key]
-                if (!d?.items || !Array.isArray(d.items)) continue
-                if (!d.meta) continue
-                for (let item of d.items) {
-                    let k = String(item.number || item.id)
-                    if (!chMap.has(k)) {
-                        chMap.set(k, {
-                            id: item.id,
-                            number: item.number,
-                            name: item.name,
-                            language: item.language,
-                            date: item.createdAt || item.date,
-                        })
-                    }
+        // Helper: add items from any API structure
+        function addItems(items: any[]) {
+            for (let item of items) {
+                let k = String(item.number || item.id || item.hid || "")
+                if (!k) continue
+                if (!chMap.has(k)) {
+                    chMap.set(k, {
+                        id: item.hid || item.id || 0,
+                        number: item.number || item.volume || 0,
+                        name: item.name || item.title || "",
+                        language: item.language || "en",
+                        date: item.createdAt || item.date || item.publishedAt || item.updatedAt || "",
+                    })
                 }
             }
         }
 
-        // Fallback to HTML if API returned nothing
+        // Extract chapters from all captured API responses
+        if (api) {
+            for (let key of Object.keys(api)) {
+                let d = api[key]
+                if (!d || typeof d !== "object") continue
+
+                // __direct_chapters: array of chapter page responses
+                if (Array.isArray(d)) {
+                    for (let page of d) {
+                        if (page?.items) addItems(page.items)
+                        if (page?.data?.chapters) addItems(page.data.chapters)
+                    }
+                    continue
+                }
+
+                // Chapters API page: { items: [...], meta: {...} }
+                if (d.items && Array.isArray(d.items)) { addItems(d.items); continue }
+
+                // Volumes API: { data: { chapters: [...] } } or { data: { volumes: [{ chapters: [...] }] } }
+                if (d.data) {
+                    if (d.data.chapters && Array.isArray(d.data.chapters)) { addItems(d.data.chapters); continue }
+                    if (d.data.volumes && Array.isArray(d.data.volumes)) {
+                        for (let vol of d.data.volumes) {
+                            if (vol.chapters) addItems(vol.chapters)
+                        }
+                        continue
+                    }
+                }
+
+                // Direct: { chapters: [...] }
+                if (d.chapters && Array.isArray(d.chapters)) { addItems(d.chapters); continue }
+            }
+        }
+
+        // Fallback to HTML — parse chapter rows from rendered DOM
         if (chMap.size === 0) {
-            let re = /<a[^>]*class="title-detail__row-link"[^>]*href="\/title\/[^/]+\/chapter\/(\d+)"[^>]*>[\s\S]*?<span[^>]*class="title-detail__row-num"[^>]*>Ch\.\s*([\d.]+)<\/span>/g
-            let m: RegExpExecArray | null
-            while ((m = re.exec(html)) !== null) {
-                let k = m[2]
-                if (!chMap.has(k)) chMap.set(k, { id: parseInt(m[1]), number: parseFloat(m[2]) })
+            let patterns = [
+                /<a[^>]*class="title-detail__row-link"[^>]*href="\/title\/[^/]+\/chapter\/(\d+)"[^>]*>[\s\S]*?<span[^>]*class="title-detail__row-num"[^>]*>Ch\.\s*([\d.]+)<\/span>/g,
+                /<a[^>]*href="\/title\/[^/]+\/chapter\/(\d+)"[\s\S]{0,500}?Ch\.\s*([\d.]+)<\/span>/g,
+                /\/title\/[^/]+\/chapter\/(\d+)[^"]*"[^>]*>[\s\S]{0,200}?Ch[^0-9]*([\d.]+)/g,
+            ]
+            for (let re of patterns) {
+                let m: RegExpExecArray | null
+                while ((m = re.exec(html)) !== null) {
+                    let k = m[2]
+                    if (!chMap.has(k)) chMap.set(k, { id: parseInt(m[1]), number: parseFloat(m[2]) })
+                }
+                if (chMap.size > 0) break
+            }
+        }
+
+        // Last resort: parse from JSON in __remixContext or similar
+        if (chMap.size === 0) {
+            let scriptM = html.match(/<script[^>]*>window\.__remixContext\s*=\s*({[\s\S]*?})<\/script>/)
+            if (scriptM) {
+                try {
+                    let ctx = JSON.parse(scriptM[1])
+                    for (let key of Object.keys(ctx?.routeData || {})) {
+                        let rd = ctx.routeData[key]
+                        if (rd?.chapters) addItems(rd.chapters)
+                        if (rd?.items) addItems(rd.items)
+                        if (rd?.data?.chapters) addItems(rd.data.chapters)
+                        if (rd?.data?.volumes) {
+                            for (let vol of rd.data.volumes) {
+                                if (vol.chapters) addItems(vol.chapters)
+                            }
+                        }
+                    }
+                } catch {}
             }
         }
 

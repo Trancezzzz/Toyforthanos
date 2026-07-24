@@ -136,27 +136,77 @@ async function handleSolve(reqBody) {
       });
     }
 
-    // Load more content: scroll chapter list or click load-more buttons
+    // Load more content: scroll all containers + trigger SPA lazy loading
     if (reqBody.loadMore) {
-      for (let attempt = 0; attempt < 30; attempt++) {
+      const slug = new URL(target).pathname.replace('/title/', '').split('/')[0];
+      for (let attempt = 0; attempt < 20; attempt++) {
         const beforeCount = Object.keys(apiResponses).filter(k => k.includes('/chapters')).length;
+        const beforeRows = await page.evaluate(() => document.querySelectorAll('.title-detail__row, [class*="chapter-row"], tbody tr, .chapters-list > *').length);
+
+        // Phase 1: Aggressive scroll of ALL scrollable containers
+        await page.evaluate(async () => {
+          // Scroll every element that can scroll
+          const els = document.querySelectorAll('body *');
+          for (const el of els) {
+            const s = window.getComputedStyle(el);
+            const isScroll = (s.overflow === 'auto' || s.overflow === 'scroll' ||
+                             s.overflowY === 'auto' || s.overflowY === 'scroll') &&
+                            el.scrollHeight > el.clientHeight + 10;
+            if (!isScroll) continue;
+            const max = el.scrollHeight - el.clientHeight;
+            for (let y = 0; y < max; y += Math.max(200, Math.floor(max / 10))) {
+              el.scrollTop = y;
+              await new Promise(r => setTimeout(r, 50));
+            }
+            el.scrollTop = 0;
+          }
+          // Also scroll window to bottom
+          window.scrollTo(0, document.body.scrollHeight);
+          await new Promise(r => setTimeout(r, 300));
+          window.scrollTo(0, 0);
+        });
+
+        // Phase 2: Direct API fetch from page context (uses page cookies, same origin)
+        if (slug) {
+          const moreChapters = await page.evaluate(async (slug) => {
+            const results = [];
+            for (let p = 1; p <= 10; p++) {
+              try {
+                const r = await fetch(`/api/titles/${slug}/chapters?language=en&sort=number&order=desc&page=${p}&limit=20`, {
+                  credentials: 'include',
+                  headers: { 'Accept': 'application/json', 'x-requested-with': 'XMLHttpRequest' }
+                });
+                if (!r.ok) break;
+                const d = await r.json();
+                results.push(d);
+                if (!d.meta?.hasNext) break;
+              } catch { break; }
+            }
+            return results;
+          }, slug);
+          if (moreChapters && moreChapters.length > 1) {
+            apiResponses['__direct_chapters'] = moreChapters;
+            consoleLogs.push(`[DIRECT] fetched ${moreChapters.length} chapter pages from context`);
+          }
+        }
+
+        // Phase 3: Click any interactive load triggers
         await page.evaluate(() => {
-          // Click any "load more" buttons
-          document.querySelectorAll('button').forEach(b => {
-            if (b.textContent?.toLowerCase().includes('load') || b.textContent?.toLowerCase().includes('show') || b.textContent?.toLowerCase().includes('more'))
+          document.querySelectorAll('button, a, [role="button"]').forEach(b => {
+            const t = (b.textContent || '').toLowerCase();
+            if (t.includes('load') || t.includes('show') || t.includes('more') || t.includes('all') || t === '+')
               b.click();
           });
-          // Scroll chapter list container
-          const list = document.querySelector('.title-detail__list');
-          if (list) { list.scrollTop = list.scrollHeight; }
-          window.scrollTo(0, document.body.scrollHeight);
         });
-        await new Promise(r => setTimeout(r, 1000));
+
+        await new Promise(r => setTimeout(r, 1500));
+
         const afterCount = Object.keys(apiResponses).filter(k => k.includes('/chapters')).length;
-        if (afterCount > beforeCount) {
-          consoleLogs.push(`[LOADMORE] attempt ${attempt}: captured new chapter page`);
+        const afterRows = await page.evaluate(() => document.querySelectorAll('.title-detail__row, [class*="chapter-row"], tbody tr, .chapters-list > *').length);
+        if (afterRows > beforeRows || afterCount > beforeCount) {
+          consoleLogs.push(`[LOADMORE] attempt ${attempt}: rows ${beforeRows}→${afterRows}, api ${beforeCount}→${afterCount}`);
         } else {
-          consoleLogs.push(`[LOADMORE] no more chapter pages after ${attempt} attempts`);
+          consoleLogs.push(`[LOADMORE] no more content after ${attempt} tries`);
           break;
         }
       }
