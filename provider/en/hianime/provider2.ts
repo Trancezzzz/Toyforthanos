@@ -45,8 +45,19 @@ function parseM3u8(body: string, baseUrl: string): VideoSource[] {
     return out
 }
 
+function getFile(json: any): string {
+    if (!json || !json.sources) return ""
+    let s = json.sources
+    if (typeof s.file === "string") return s.file
+    if (Array.isArray(s)) {
+        for (let v of s) {
+            if (typeof v.file === "string") return v.file
+        }
+    }
+    return ""
+}
+
 class Provider {
-    constructor() {}
     base = "https://hianime.ms"
 
     getSettings(): Settings {
@@ -64,11 +75,13 @@ class Provider {
             let linkM = parts[i].match(/href="https:\/\/hianime\.ms\/details\/([^"]+)"/)
             let titleM = parts[i].match(/class="dynamic-name"[^>]*>([^<]+)</)
             if (linkM && titleM) {
+                let sub = parts[i].indexOf("tick-sub") !== -1
+                let dub = parts[i].indexOf("tick-dub") !== -1
                 out.push({
                     id: linkM[1],
                     title: titleM[1].trim(),
                     url: this.base + "/details/" + linkM[1],
-                    subOrDub: parts[i].indexOf("tick-sub") !== -1 ? "sub" : "dub",
+                    subOrDub: sub ? "sub" : (dub ? "dub" : "sub"),
                 })
             }
         }
@@ -114,19 +127,19 @@ class Provider {
         let html = await (await fetch(episode.url, { headers: headers(this.base) })).text()
         let tokenM = html.match(/data-stream-token="([^"]+)"/)
         let realId = tokenM ? b64decode(tokenM[1]).split(":")[0] : ""
-        if (!realId) throw new Error("No stream token")
+        if (!realId) throw new Error("No stream token for ep " + episode.number)
 
         let br = await fetch("https://megaplay.buzz/stream/s-2/" + realId + "/" + version, { headers: headers(sr) })
-        if (!br.ok) throw new Error("Backup failed: " + br.status)
+        if (!br.ok) throw new Error("Backup failed for ep " + episode.number + ": " + br.status)
         let didM = (await br.text()).match(/data-id="(\d+)"/)
         let dataId = didM ? didM[1] : ""
-        if (!dataId) throw new Error("No data-id")
+        if (!dataId) throw new Error("No data-id for ep " + episode.number)
 
         let res = await fetch("https://megaplay.buzz/stream/getSourcesNew?id=" + dataId + "&id=" + dataId, { headers: headers(sr) })
-        if (!res.ok) throw new Error("Sources failed: " + res.status)
+        if (!res.ok) throw new Error("Sources failed for ep " + episode.number + ": " + res.status)
         let json = JSON.parse(await res.text())
-        let masterUrl = json.sources && json.sources.file
-        if (!masterUrl) throw new Error("No source file")
+        let masterUrl = getFile(json)
+        if (!masterUrl) throw new Error("No source for ep " + episode.number)
 
         let subs: { url: string; lang: string }[] = []
         if (json.tracks) {
