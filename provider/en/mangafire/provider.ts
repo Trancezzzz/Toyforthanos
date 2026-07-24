@@ -167,12 +167,17 @@ class Provider {
         log("findChapters:", mangaId)
         let url = base + "/title/" + mangaId
         let { body: html, api } = await bypassFetch(url, 60000, 30000, true)
-        if (!html) return []
+        if (!html) { log("no HTML returned"); return [] }
+
+        log("API keys:", api ? Object.keys(api).join(", ") : "none")
 
         let chMap = new Map<string, { id: number; number: number; name?: string; language?: string; date?: string }>()
 
-        // Helper: add items from any API structure
-        function addItems(items: any[]) {
+        function addItems(items: any[], source: string) {
+            log("addItems from", source, "count:", items.length)
+            for (let i = 0; i < Math.min(items.length, 3); i++) {
+                log("  sample:", JSON.stringify(items[i]).slice(0, 120))
+            }
             for (let item of items) {
                 let k = String(item.number || item.id || item.hid || "")
                 if (!k) continue
@@ -188,45 +193,43 @@ class Provider {
             }
         }
 
-        // Extract chapters from captured API responses (only chapter/volume endpoints)
         if (api) {
             for (let key of Object.keys(api)) {
-                // Skip non-chapter endpoints — only process chapters, volumes, __direct_chapters
-                if (!key.includes('/chapters') && !key.includes('/volumes') && key !== '__direct_chapters') continue
+                let pass = key.includes('/chapters') || key.includes('/volumes') || key === '__direct_chapters'
+                log("  api key:", key.slice(0, 80), "pass filter:", pass)
+                if (!pass) continue
 
                 let d = api[key]
-                if (!d || typeof d !== "object") continue
+                if (!d || typeof d !== "object") { log("  skipped: not object"); continue }
+                log("  structure:", JSON.stringify(Object.keys(d)).slice(0, 150))
 
-                // __direct_chapters: array of chapter page responses
                 if (Array.isArray(d)) {
+                    log("  is array of", d.length)
                     for (let page of d) {
-                        if (page?.items) addItems(page.items)
-                        if (page?.data?.chapters) addItems(page.data.chapters)
+                        if (page?.items) addItems(page.items, key + "/items")
+                        if (page?.data?.chapters) addItems(page.data.chapters, key + "/data.chapters")
                     }
                     continue
                 }
 
-                // Chapters API page: { items: [...], meta: {...} }
-                if (d.items && Array.isArray(d.items)) { addItems(d.items); continue }
-
-                // Volumes API: { data: { chapters: [...] } } or { data: { volumes: [{ chapters: [...] }] } }
+                if (d.items && Array.isArray(d.items)) { addItems(d.items, key + ".items"); continue }
                 if (d.data) {
-                    if (d.data.chapters && Array.isArray(d.data.chapters)) { addItems(d.data.chapters); continue }
+                    if (d.data.chapters && Array.isArray(d.data.chapters)) { addItems(d.data.chapters, key + ".data.chapters"); continue }
                     if (d.data.volumes && Array.isArray(d.data.volumes)) {
                         for (let vol of d.data.volumes) {
-                            if (vol.chapters) addItems(vol.chapters)
+                            if (vol.chapters) addItems(vol.chapters, key + ".volumes[].chapters")
                         }
                         continue
                     }
                 }
-
-                // Direct: { chapters: [...] }
-                if (d.chapters && Array.isArray(d.chapters)) { addItems(d.chapters); continue }
+                if (d.chapters && Array.isArray(d.chapters)) { addItems(d.chapters, key + ".chapters"); continue }
+                log("  no matching chapter structure found for", key.slice(0, 60))
             }
         }
 
-        // Fallback to HTML — parse chapter rows from rendered DOM
-        if (chMap.size === 0) {
+        // Always parse HTML to complement API data (most reliable source)
+        if (html.length > 0) {
+            let beforeCount = chMap.size
             let patterns = [
                 /<a[^>]*class="title-detail__row-link"[^>]*href="\/title\/[^/]+\/chapter\/(\d+)"[^>]*>[\s\S]*?<span[^>]*class="title-detail__row-num"[^>]*>Ch\.\s*([\d.]+)<\/span>/g,
                 /<a[^>]*href="\/title\/[^/]+\/chapter\/(\d+)"[\s\S]{0,500}?Ch\.\s*([\d.]+)<\/span>/g,
@@ -234,34 +237,38 @@ class Provider {
             ]
             for (let re of patterns) {
                 let m: RegExpExecArray | null
+                let count = 0
                 while ((m = re.exec(html)) !== null) {
                     let k = m[2]
-                    if (!chMap.has(k)) chMap.set(k, { id: parseInt(m[1]), number: parseFloat(m[2]) })
+                    if (!chMap.has(k)) { chMap.set(k, { id: parseInt(m[1]), number: parseFloat(m[2]) }); count++ }
                 }
-                if (chMap.size > 0) break
+                if (count > 0) { log("HTML added:", count, "new"); break }
             }
+            log("after HTML parse, total:", chMap.size, "from HTML:", chMap.size - beforeCount)
         }
 
-        // Last resort: parse from JSON in __remixContext or similar
         if (chMap.size === 0) {
+            log("last resort: __remixContext")
             let scriptM = html.match(/<script[^>]*>window\.__remixContext\s*=\s*({[\s\S]*?})<\/script>/)
             if (scriptM) {
                 try {
                     let ctx = JSON.parse(scriptM[1])
                     for (let key of Object.keys(ctx?.routeData || {})) {
                         let rd = ctx.routeData[key]
-                        if (rd?.chapters) addItems(rd.chapters)
-                        if (rd?.items) addItems(rd.items)
-                        if (rd?.data?.chapters) addItems(rd.data.chapters)
+                        if (rd?.chapters) addItems(rd.chapters, "remix." + key + ".chapters")
+                        if (rd?.items) addItems(rd.items, "remix." + key + ".items")
+                        if (rd?.data?.chapters) addItems(rd.data.chapters, "remix." + key + ".data.chapters")
                         if (rd?.data?.volumes) {
                             for (let vol of rd.data.volumes) {
-                                if (vol.chapters) addItems(vol.chapters)
+                                if (vol.chapters) addItems(vol.chapters, "remix." + key + ".volumes[].chapters")
                             }
                         }
                     }
-                } catch {}
-            }
+                } catch (e) { log("remixContext parse error:", String(e).slice(0, 100)) }
+            } else { log("no __remixContext found") }
         }
+
+        log("chMap size:", chMap.size)
 
         let chapters: ChapterDetails[] = []
         for (let [k, v] of chMap) {
