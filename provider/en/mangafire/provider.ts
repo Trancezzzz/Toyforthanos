@@ -188,9 +188,12 @@ class Provider {
             }
         }
 
-        // Extract chapters from all captured API responses
+        // Extract chapters from captured API responses (only chapter/volume endpoints)
         if (api) {
             for (let key of Object.keys(api)) {
+                // Skip non-chapter endpoints — only process chapters, volumes, __direct_chapters
+                if (!key.includes('/chapters') && !key.includes('/volumes') && key !== '__direct_chapters') continue
+
                 let d = api[key]
                 if (!d || typeof d !== "object") continue
 
@@ -289,6 +292,7 @@ class Provider {
 
         if (api) {
             for (let key of Object.keys(api)) {
+                if (!key.includes('/chapters/')) continue
                 let d = api[key]?.data
                 if (d?.pages && Array.isArray(d.pages)) {
                     for (let p of d.pages) {
