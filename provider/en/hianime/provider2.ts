@@ -160,9 +160,12 @@ class Provider {
     }
 
     async _scrapeWatchPage(episodeUrl: string): Promise<string> {
+        console.log("[hianime] fetch:", episodeUrl.substring(0, 80))
         let res = await fetch(episodeUrl, { headers: this._headers(this.base) })
-        if (!res.ok) return ""
-        return await res.text()
+        if (!res.ok) { console.log("[hianime] fetch fail:", res.status); return "" }
+        let html = await res.text()
+        console.log("[hianime] fetch ok, length:", html.length)
+        return html
     }
 
     async findEpisodeServer(episode: EpisodeDetails, server: string): Promise<EpisodeServer> {
@@ -171,8 +174,10 @@ class Provider {
         let key = this._serverKey(server)
         let sr = this._serverReferers[key] || "https://megaplay.buzz/"
         let html = await this._scrapeWatchPage(episode.url)
+        console.log("[hianime] html token search:", html.indexOf("data-stream-token") !== -1 ? "found" : "NOT FOUND")
         let aniM = html.match(/var anilistId\s*=\s*(\d+)/)
         let tokenM = html.match(/data-stream-token="([^"]+)"/)
+        console.log("[hianime] aniM:", aniM ? aniM[1] : "null", "tokenM:", tokenM ? tokenM[1].substring(0,10)+"..." : "null")
         let anilistId = aniM ? aniM[1] : ""
 
         if (key === "volt" && anilistId) {
