@@ -217,18 +217,37 @@ class Provider {
             return { server: server, headers: this._headers(sr), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
-        // Ryu server — fetch megaplay.buzz and parse m3u8
+        // Ryu — use getSourcesNew JSON API
         let epId = this._tokenToEpisodeId(data.streamToken)
         if (epId) {
-            let url = "https://megaplay.buzz/stream/s-2/" + epId + "/" + version
-            console.log("[hianime] megaplay:", url.substring(0, 60))
-            let m3u8Result = await this._fetchM3u8(url, sr)
-            if (m3u8Result.sources.length > 0) {
-                console.log("[hianime] ryu hls:", m3u8Result.sources.length, "variants")
-                return { server: server, headers: this._headers(sr), videoSources: m3u8Result.sources }
+            let apiUrl = "https://megaplay.buzz/stream/getSourcesNew?id=" + epId + "&id=" + epId
+            console.log("[hianime] ryu API:", apiUrl)
+            let res = await fetch(apiUrl, { headers: this._headers(sr) })
+            if (res.ok) {
+                let json = await res.json()
+                console.log("[hianime] ryu JSON keys:", Object.keys(json).join(","))
+                let masterUrl = json.sources && json.sources.file
+                let subs: { url: string, lang: string }[] = []
+                if (json.tracks) {
+                    for (let t of json.tracks) {
+                        if (t.file) subs.push({ url: t.file, lang: t.label || "English" })
+                    }
+                }
+                if (masterUrl) {
+                    console.log("[hianime] ryu master:", masterUrl.substring(0, 60))
+                    let m3u8Result = await this._fetchM3u8(masterUrl, sr)
+                    if (m3u8Result.sources.length > 0) {
+                        for (let s of m3u8Result.sources) {
+                            s.subtitles = subs
+                        }
+                        console.log("[hianime] ryu HLS with", m3u8Result.sources.length, "variants,", subs.length, "subs")
+                        return { server: server, headers: this._headers(sr), videoSources: m3u8Result.sources }
+                    }
+                    console.log("[hianime] ryu no variants, using master URL with subs")
+                    return { server: server, headers: this._headers(sr), videoSources: [{ url: masterUrl, quality: "auto", type: "hls", subtitles: subs }] }
+                }
             }
-            console.log("[hianime] m3u8 parse failed, using raw URL")
-            return { server: server, headers: this._headers(sr), videoSources: [{ url: m3u8Result.masterUrl, quality: "auto", type: "hls", subtitles: [] }] }
+            console.log("[hianime] ryu API failed, falling through")
         }
 
         console.log("[hianime] no token, fallback to episode URL")
