@@ -154,34 +154,84 @@ class Provider {
         return episodes
     }
 
+    _parseM3u8(body: string, baseUrl: string): VideoSource[] {
+        let sources: VideoSource[] = []
+        let lines = body.split(/\r?\n/)
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i].trim()
+            if (line.indexOf("#EXT-X-STREAM-INF:") !== -1) {
+                let nameM = line.match(/NAME="([^"]+)"/)
+                let quality = nameM ? nameM[1] : "auto"
+                let next = i + 1
+                while (next < lines.length && lines[next].trim() === "") next++
+                if (next < lines.length) {
+                    let url = lines[next].trim()
+                    if (url.indexOf("http") !== 0) {
+                        let sep = baseUrl.lastIndexOf("/")
+                        url = baseUrl.substring(0, sep + 1) + url
+                    }
+                    sources.push({ url: url, quality: quality, type: "hls", subtitles: [] })
+                }
+            }
+        }
+        return sources
+    }
+
+    async _fetchM3u8(url: string, referer: string): Promise<{ sources: VideoSource[], masterUrl: string }> {
+        console.log("[hianime] fetch m3u8:", url.substring(0, 60))
+        let res = await fetch(url, { headers: this._headers(referer), redirect: "follow" })
+        if (!res.ok) { console.log("[hianime] m3u8 fail:", res.status); return { sources: [], masterUrl: url } }
+        let finalUrl = res.url || url
+        let body = await res.text()
+        console.log("[hianime] m3u8 body starts with:", body.substring(0, 40))
+        if (body.indexOf("#EXTM3U") !== -1) {
+            let sources = this._parseM3u8(body, finalUrl)
+            console.log("[hianime] m3u8 parsed:", sources.length, "variants")
+            if (sources.length > 0) return { sources, masterUrl: finalUrl }
+        }
+        return { sources: [], masterUrl: finalUrl }
+    }
+
     async findEpisodeServer(episode: EpisodeDetails, server: string): Promise<EpisodeServer> {
         console.log("[hianime] findEpisodeServer ep:", episode.number, "server:", server)
-        let url = ""
         let version = episode.subOrDub === "dub" ? "dub" : "sub"
         let key = this._serverKey(server)
-        let data = await this._scrapeEpisodeData(episode.url)
         let sr = this._serverReferers[key as keyof typeof this._serverReferers] || "https://megaplay.buzz/"
+        let data = await this._scrapeEpisodeData(episode.url)
 
         if (key === "volt" && data.anilistId) {
-            url = "https://vidnest.fun/anime/" + data.anilistId + "/" + episode.number + "/" + version
-        } else if (key === "warp" && data.anilistId) {
-            url = "https://tryembed.us.cc/embed/anime/" + data.anilistId + "/" + episode.number + "/" + version
-        } else if (key === "ayame" && data.anilistId) {
-            url = "https://vidnest.fun/animepahe/" + data.anilistId + "/" + episode.number + "/" + version
+            let url = "https://vidnest.fun/anime/" + data.anilistId + "/" + episode.number + "/" + version
+            console.log("[hianime] volt URL:", url.substring(0, 60))
+            return { server: server, headers: this._headers(sr), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
-        if (!url) {
-            let epId = this._tokenToEpisodeId(data.streamToken)
-            if (epId) { url = "https://megaplay.buzz/stream/s-2/" + epId + "/" + version; console.log("[hianime] ryu fallback") }
-            else console.log("[hianime] no token for ryu")
+        if (key === "warp" && data.anilistId) {
+            let url = "https://tryembed.us.cc/embed/anime/" + data.anilistId + "/" + episode.number + "/" + version
+            console.log("[hianime] warp URL:", url.substring(0, 60))
+            return { server: server, headers: this._headers(sr), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
-        if (!url) {
-            console.log("[hianime] fallback to episode URL")
-            return { server: server, headers: this._headers(episode.url), videoSources: [{ url: episode.url, quality: "auto", type: "unknown", subtitles: [] }] }
+        if (key === "ayame" && data.anilistId) {
+            let url = "https://vidnest.fun/animepahe/" + data.anilistId + "/" + episode.number + "/" + version
+            console.log("[hianime] ayame URL:", url.substring(0, 60))
+            return { server: server, headers: this._headers(sr), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
         }
 
-        console.log("[hianime] return URL:", url.substring(0, 60))
-        return { server: server, headers: this._headers(sr), videoSources: [{ url: url, quality: "auto", type: "unknown", subtitles: [] }] }
+        // Ryu server — fetch megaplay.buzz and parse m3u8
+        let epId = this._tokenToEpisodeId(data.streamToken)
+        if (epId) {
+            let url = "https://megaplay.buzz/stream/s-2/" + epId + "/" + version
+            console.log("[hianime] megaplay:", url.substring(0, 60))
+            let m3u8Result = await this._fetchM3u8(url, sr)
+            if (m3u8Result.sources.length > 0) {
+                console.log("[hianime] ryu hls:", m3u8Result.sources.length, "variants")
+                return { server: server, headers: this._headers(sr), videoSources: m3u8Result.sources }
+            }
+            console.log("[hianime] m3u8 parse failed, using raw URL")
+            return { server: server, headers: this._headers(sr), videoSources: [{ url: m3u8Result.masterUrl, quality: "auto", type: "hls", subtitles: [] }] }
+        }
+
+        console.log("[hianime] no token, fallback to episode URL")
+        return { server: server, headers: this._headers(episode.url), videoSources: [{ url: episode.url, quality: "auto", type: "unknown", subtitles: [] }] }
     }
 }
