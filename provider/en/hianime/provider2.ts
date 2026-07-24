@@ -59,7 +59,7 @@ class Provider {
 
     getSettings(): Settings {
         return {
-            episodeServers: ["Ryu", "Volt", "Warp", "Ayame"],
+            episodeServers: ["Ryu"],
             supportsDub: true,
         }
     }
@@ -178,22 +178,18 @@ class Provider {
         let aniM = html.match(/var anilistId\s*=\s*(\d+)/)
         let tokenM = html.match(/data-stream-token="([^"]+)"/)
         console.log("[hianime] aniM:", aniM ? aniM[1] : "null", "tokenM:", tokenM ? tokenM[1].substring(0,10)+"..." : "null")
-        let anilistId = aniM ? aniM[1] : ""
-
-        if (key === "volt" && anilistId) {
-            return { server, headers: this._headers(sr), videoSources: [{ url: "https://vidnest.fun/anime/" + anilistId + "/" + episode.number + "/" + version, quality: "auto", type: "unknown", subtitles: [] }] }
-        }
-        if (key === "warp" && anilistId) {
-            return { server, headers: this._headers(sr), videoSources: [{ url: "https://tryembed.us.cc/embed/anime/" + anilistId + "/" + episode.number + "/" + version, quality: "auto", type: "unknown", subtitles: [] }] }
-        }
-        if (key === "ayame" && anilistId) {
-            return { server, headers: this._headers(sr), videoSources: [{ url: "https://vidnest.fun/animepahe/" + anilistId + "/" + episode.number + "/" + version, quality: "auto", type: "unknown", subtitles: [] }] }
-        }
 
         // Ryu — two-step: backup URL → data-id → getSourcesNew
         let rawToken = tokenM ? tokenM[1] : ""
+        console.log("[hianime] ryu rawToken len:", rawToken.length, "val:", rawToken.substring(0, 15))
+        let atobTest = ""
+        try { atobTest = atob("MjkwODg6YjUxYjQ4MjY") } catch (e) { atobTest = "ERR:" + String(e) }
+        console.log("[hianime] ryu atob test:", atobTest)
+        let decoded = ""
+        try { decoded = atob(rawToken) } catch (e) { decoded = "ERR:" + String(e) }
+        console.log("[hianime] ryu atob raw:", decoded)
         let realId = this._tokenToEpisodeId(rawToken)
-        console.log("[hianime] ryu realId from token:", realId)
+        console.log("[hianime] ryu realId:", realId)
         if (realId) {
             let backupUrl = "https://megaplay.buzz/stream/s-2/" + realId + "/" + version
             console.log("[hianime] ryu backup URL:", backupUrl)
