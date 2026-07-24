@@ -30,13 +30,35 @@ https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/hia
 https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/it/animeworld/manifest.json
 ```
 
+### 🇬🇧 EN — SubsPlease (Torrent)
+
+- **ID:** `subsplease`
+- **Site:** [subsplease.org](https://subsplease.org)
+- **Type:** Anime Torrent Provider
+- **Manifest:** [`provider/en/subsplease/manifest.json`](provider/en/subsplease/manifest.json)
+
+```
+https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/subsplease/manifest.json
+```
+
+### 🇬🇧 EN — MangaDex (Manga)
+
+- **ID:** `mangadex`
+- **Site:** [mangadex.org](https://mangadex.org)
+- **Type:** Manga Provider
+- **Manifest:** [`provider/en/mangadex/manifest.json`](provider/en/mangadex/manifest.json)
+
+```
+https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/mangadex/manifest.json
+```
+
 ## How to Install
 
 1. Open **Seanime**
-2. Go to **Settings → Online Streaming Providers**
-3. Click **Add Provider**
+2. Go to **Settings → Extensions / Online Streaming Providers** (type-specific)
+3. Click **Add Extension**
 4. Paste the manifest URL from above
-5. The provider appears in your streaming source list
+5. The provider appears in your list
 
 ## Repo
 
