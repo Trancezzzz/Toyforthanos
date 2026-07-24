@@ -110,27 +110,42 @@ class Provider {
         let { name, animeId } = this._extractSlug(id)
         console.log("[hianime] findEpisodes:", name, animeId)
         if (!name) return []
-        let ep1Url = this._url("/watch-" + name + "-episode-1-" + animeId)
-        let res = await fetch(ep1Url, { headers: this._headers(this.base) })
-        if (!res.ok) return []
+        let ajaxUrl = this.base + "/ajax/v2/episode/list/" + animeId
+        console.log("[hianime] ajax:", ajaxUrl)
+        let res = await fetch(ajaxUrl, { headers: this._headers(this.base) })
+        if (!res.ok) { console.log("[hianime] ajax fail:", res.status); return [] }
         let html = await res.text()
+        console.log("[hianime] ajax html length:", html.length)
         let episodes: EpisodeDetails[] = []
-        let epRx = /<a\s+class="ws-ep[^"]*"[^>]*>[\s\S]*?<\/a>/g
+        let epRx = /<a\s+href="#"([\s\S]*?)<\/a>/g
         let m
         while ((m = epRx.exec(html)) !== null) {
-            let block = m[0]
-            let numM = block.match(/data-episode="(\d+)"/)
-            let urlM = block.match(/data-url="([^"]+)"/)
-            let titleM = block.match(/<span class="ws-ep__title">([^<]+)</)
-            if (numM && urlM) {
+            let block = m[1]
+            let numM = block.match(/data-number="(\d+)"/)
+            let idM = block.match(/data-id="([^"]+)"/)
+            let titleM = block.match(/title="([^"]+)"/)
+            if (numM && idM) {
                 let num = parseInt(numM[1], 10)
                 if (!episodes.some(function (e) { return e.number === num })) {
+                    let epUrl = this.base + "/watch/" + name + "-" + animeId + "?ep=" + idM[1]
                     episodes.push({
-                        id: numM[1],
+                        id: idM[1],
                         number: num,
-                        url: urlM[1].indexOf("http") === 0 ? urlM[1] : this.base + urlM[1],
+                        url: epUrl,
                         title: titleM ? titleM[1] : "Episode " + num,
                     })
+                }
+            }
+        }
+        if (episodes.length === 0) {
+            console.log("[hianime] trying fallback regex")
+            let epRx2 = /data-number="(\d+)"[\s\S]*?data-id="([^"]+)"/g
+            let m2
+            while ((m2 = epRx2.exec(html)) !== null) {
+                let num = parseInt(m2[1], 10)
+                if (!episodes.some(function (e) { return e.number === num })) {
+                    let epUrl = this.base + "/watch/" + name + "-" + animeId + "?ep=" + m2[2]
+                    episodes.push({ id: m2[2], number: num, url: epUrl, title: "Episode " + num })
                 }
             }
         }
