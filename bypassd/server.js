@@ -145,7 +145,7 @@ async function handleSolve(reqBody) {
 
     // Load more content: scroll all containers + trigger SPA lazy loading
     if (reqBody.loadMore) {
-      const slug = new URL(target).pathname.replace('/title/', '').split('/')[0];
+      const slug = (new URL(target).pathname.replace('/title/', '').split('/')[0] || '').split('-')[0];
       for (let attempt = 0; attempt < 20; attempt++) {
         const beforeCount = Object.keys(apiResponses).filter(k => k.includes('/chapters')).length;
         const beforeRows = await page.evaluate(() => document.querySelectorAll('.title-detail__row, .title-detail__chapters > *, [class*="chapter-row"], [class*="chapter-item"], tbody tr, .chapters-list > *').length);
@@ -173,7 +173,11 @@ async function handleSolve(reqBody) {
           window.scrollTo(0, 0);
         });
 
-        // Phase 2: Direct API fetch from page context (uses page cookies, same origin)
+        // Phase 2: Extract chapter page data from within page context.
+        // We intercept the SPA's own API calls (via response listener), but if the SPA
+        // didn't trigger chapter page loads, we navigate to each chapter URL to force
+        // the SPA to load its page data. Using the same page session preserves cookies
+        // and avoids Cloudflare re-challenge.
         if (slug) {
           const moreChapters = await page.evaluate(async (slug) => {
             const results = [];
@@ -224,6 +228,38 @@ async function handleSolve(reqBody) {
           break;
         }
       }
+    }
+
+    // Phase 4: Pre-fetch chapter page data within the same page session.
+    // Avoids a separate bypassd call per chapter in findChapterPages.
+    if (reqBody.loadMore && reqBody.prefetchChapters !== false) {
+      const prefetchLimit = typeof reqBody.prefetchChapters === 'number' ? reqBody.prefetchChapters : Infinity;
+      const chapterIds = [];
+      for (const key of Object.keys(apiResponses)) {
+        if (key === '__byBase') continue;
+        const val = apiResponses[key];
+        if (val?.items && Array.isArray(val.items)) {
+          for (const ch of val.items) {
+            if (ch.id && !chapterIds.includes(String(ch.id)) && chapterIds.length < prefetchLimit)
+              chapterIds.push(String(ch.id));
+          }
+        }
+      }
+      const origin = new URL(target).origin;
+      const fullSlug = new URL(target).pathname.replace('/title/', '').split('/')[0];
+      consoleLogs.push(`[PREFETCH] prefetching ${chapterIds.length} chapter page sets`);
+      for (let i = 0; i < chapterIds.length; i++) {
+        const chId = chapterIds[i];
+        const chUrl = `${origin}/title/${fullSlug}/chapter/${chId}`;
+        try {
+          await page.goto(chUrl, { waitUntil: 'networkidle0', timeout: 25000 });
+          await new Promise(r => setTimeout(r, 1000));
+        } catch (err) {
+          consoleLogs.push(`[PREFETCH] chapter ${chId} navigation error: ${err.message?.slice(0, 100)}`);
+        }
+      }
+      try { await page.goto(target, { waitUntil: 'networkidle0', timeout: 25000 }); } catch {}
+      consoleLogs.push(`[PREFETCH] completed ${chapterIds.length} chapters`);
     }
 
     await page.evaluate(() => new Promise(r => {
