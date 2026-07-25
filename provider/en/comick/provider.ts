@@ -68,41 +68,49 @@ class Provider {
 
     async findChapters(mangaId: string): Promise<ChapterDetails[]> {
         let json = await postBypassd(api + "/comic/" + encodeURIComponent(mangaId), {
-            timeoutMs: 60000, waitMs: 30000, scroll: true, loadMore: true,
+            timeoutMs: 45000, waitMs: 20000, scroll: false, loadMore: false,
         })
 
         let nd = extractNextData(json.body || "")
         if (!nd) return []
 
-        let chapters = nd.props?.pageProps?.firstChapters
-        if (!chapters || !Array.isArray(chapters)) chapters = []
+        let firstChapters = nd.props?.pageProps?.firstChapters
+        if (!Array.isArray(firstChapters) || firstChapters.length === 0) return []
 
-        let loadedHids = new Set(chapters.map((c: any) => c.hid))
+        let firstEn = firstChapters.find((c: any) => c.lang === "en" && c.hid)
+        let firstHid = firstEn?.hid || firstChapters.find((c: any) => c.hid)?.hid || ""
+        if (!firstHid) return []
 
-        let chapterPage = nd.props?.pageProps?.chapters
-        if (Array.isArray(chapterPage)) {
-            for (let c of chapterPage) {
-                if (c.hid && !loadedHids.has(c.hid)) {
-                    loadedHids.add(c.hid)
-                    chapters.push(c)
-                }
-            }
+        if (!nd.props?.pageProps?.comic?.slug) return []
+        let slug = nd.props.pageProps.comic.slug
+
+        let chapterJson = await postBypassd(api + "/comic/" + slug + "/" + firstHid, {
+            timeoutMs: 45000, waitMs: 20000, scroll: false, loadMore: false,
+        })
+
+        let chapterNd = extractNextData(chapterJson.body || "")
+        if (!chapterNd) return []
+
+        let chapters = chapterNd.props?.pageProps?.chapters
+        if (!Array.isArray(chapters) || chapters.length === 0) {
+            chapters = chapterNd.props?.pageProps?.firstChapters || firstChapters
         }
 
+        let seenChap = new Set<string>()
         let out: ChapterDetails[] = []
-        let seen = new Set<string>()
         for (let ch of chapters) {
+            let chapNum = ch.chap != null ? String(ch.chap) : ""
+            if (!chapNum || seenChap.has(chapNum)) continue
+            seenChap.add(chapNum)
+
             let hid = ch.hid || ""
-            if (!hid || seen.has(hid)) continue
-            seen.add(hid)
-            let num = ch.chap || "0"
-            let title = ch.title || "Chapter " + num
-            let chapterUrl = api + "/comic/" + mangaId + "/" + hid
+            let title = ch.title || "Chapter " + chapNum
+            let chapterUrl = api + "/comic/" + slug + "/" + hid
             out.push({
                 id: chapterUrl,
                 url: chapterUrl,
                 title: title,
-                chapter: String(num),
+                chapter: chapNum,
                 index: 0,
                 language: ch.lang || "en",
                 updatedAt: ch.created_at || ch.publish_at || "",
@@ -141,7 +149,7 @@ class Provider {
             let m
             while ((m = imgRx.exec(html)) !== null) {
                 let u = m[1]
-                if (!u || seen.has(u)) continue
+                if (!u || seen.has(u) || u.indexOf("favicon") !== -1 || u.indexOf("icon") !== -1) continue
                 seen.add(u)
                 images.push({ url: u })
             }
@@ -149,8 +157,7 @@ class Provider {
 
         let out: ChapterPage[] = []
         let seenUrls = new Set<string>()
-        for (let i = 0; i < images.length; i++) {
-            let img = images[i]
+        for (let img of images) {
             let u = img.url || img.src || (typeof img === "string" ? img : "")
             if (!u || seenUrls.has(u)) continue
             seenUrls.add(u)
