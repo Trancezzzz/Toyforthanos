@@ -3,7 +3,7 @@
   "name": "ComicK",
   "description": "ComicK (comick.dev) manga provider - uses bypassd for Cloudflare bypass.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/comick/manifest.json",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Trancezzz",
   "type": "manga-provider",
   "language": "typescript",
