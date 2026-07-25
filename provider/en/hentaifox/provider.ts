@@ -82,12 +82,14 @@ class Provider {
         if (!totalPages) return []
 
         let imgUrl = imgSrcM[1]
+        let extM = imgUrl.match(/\.(webp|jpg|png)$/i)
+        let ext = extM ? extM[1] : "webp"
         let base = imgUrl.replace(/\/\d+\.(webp|jpg|png)$/i, "/")
 
         let out: ChapterPage[] = []
         let seen = new Set<string>()
         for (let i = 1; i <= totalPages; i++) {
-            let u = base + i + ".webp"
+            let u = base + i + "." + ext
             if (seen.has(u)) continue
             seen.add(u)
             out.push({ url: u, index: out.length, headers: { Referer: api + "/" } })
