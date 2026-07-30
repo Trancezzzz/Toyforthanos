@@ -3,7 +3,7 @@
   "name": "AnimesDigital",
   "description": "AnimesDigital.org Portuguese anime streaming provider.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/pt/animesdigital/manifest.json",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": "Trancezzz",
   "type": "onlinestream-provider",
   "language": "typescript",

@@ -8,7 +8,7 @@ class Provider {
     }
 
     _log(...args: any[]) {
-        console.log(this.logTag, ...args)
+        if (typeof console !== 'undefined' && console.log) console.log(this.logTag, ...args)
     }
 
     getSettings(): Settings {
