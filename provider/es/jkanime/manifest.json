@@ -1,0 +1,14 @@
+{
+  "id": "jkanime",
+  "name": "JKAnime",
+  "description": "JKAnime.net Spanish anime streaming provider.",
+  "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/es/jkanime/manifest.json",
+  "version": "1.0.0",
+  "author": "Trancezzz",
+  "type": "onlinestream-provider",
+  "language": "typescript",
+  "lang": "es",
+  "icon": "https://jkanime.net/img/web.png",
+  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/es/jkanime/provider.ts",
+  "isDevelopment": false
+}
