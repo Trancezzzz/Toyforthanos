@@ -39,13 +39,8 @@ class Provider {
         return out
     }
 
-    async findEpisodes(id: string): Promise<EpisodeDetails[]> {
-        let url = id.indexOf("http") === 0 ? id : this.base + "/anime/a/" + id
-        let res = await fetch(url, { headers: this._h(this.base) })
-        if (!res.ok) throw new Error("findEpisodes failed " + res.status)
-        let html = await res.text()
-        let episodes: EpisodeDetails[] = []
-        let rx = /<div class="item_ep b_flex">\s*<a href="(https:\/\/animesdigital\.org\/video\/a\/([^\/"]+)\/)"[^>]*>[\s\S]*?title_anime[^>]*>([^<]+)<\/div>/g
+    _extractEpisodes(html: string, episodes: EpisodeDetails[]) {
+        let rx = /<div class="item_ep b_flex">\s*<a href="(https:\/\/animesdigital\.org\/video\/a\/([^\/"]+?)\/?)"[^>]*>[\s\S]*?title_anime[^>]*>([^<]+)<\/div>/g
         let m
         while ((m = rx.exec(html)) !== null) {
             let epTitle = m[3].trim()
@@ -60,6 +55,35 @@ class Provider {
                 title: epTitle,
             })
         }
+    }
+
+    async findEpisodes(id: string): Promise<EpisodeDetails[]> {
+        let url = id.indexOf("http") === 0 ? id : this.base + "/anime/a/" + id
+        let res = await fetch(url, { headers: this._h(this.base) })
+        if (!res.ok) throw new Error("findEpisodes failed " + res.status)
+        let html = await res.text()
+        let episodes: EpisodeDetails[] = []
+        this._extractEpisodes(html, episodes)
+
+        let shortM = html.match(/animesdigital\.org\/anime\/a\/([^"\/]+)\/page\//)
+        if (shortM) {
+            let shortId = shortM[1]
+            let maxPage = 0
+            let pageRx = new RegExp("/anime/a/" + shortId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/page/(\\d+)/", "g")
+            let pm
+            while ((pm = pageRx.exec(html)) !== null) {
+                let pn = parseInt(pm[1], 10)
+                if (pn > maxPage) maxPage = pn
+            }
+            for (let p = 2; p <= maxPage; p++) {
+                let pageUrl = this.base + "/anime/a/" + shortId + "/page/" + p + "/"
+                let pageRes = await fetch(pageUrl, { headers: this._h(this.base) })
+                if (!pageRes.ok) break
+                let pageHtml = await pageRes.text()
+                this._extractEpisodes(pageHtml, episodes)
+            }
+        }
+
         if (episodes.length === 0) throw new Error("No episodes found for " + id)
         episodes.sort(function (a, b) { return a.number - b.number })
         return episodes
