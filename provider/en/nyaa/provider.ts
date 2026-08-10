@@ -24,6 +24,9 @@
 //    bestReleases picks instead of raw resolution alone.
 //  - Freshness-aware ordering for RELEASING media — the newest release of the
 //    episode wins, not the oldest high-seed torrent.
+//  - Media-level pool cache — the title-only query for a show is cached per
+//    media, so browsing episodes reuses one broad fetch (limit 100) and
+//    filters locally; a single supplement query still fires per search.
 
 interface ProviderConfig {
     baseUrls: string[]
@@ -51,6 +54,12 @@ interface RawTorrent {
 interface SmartQuery {
     query: string
     sortBy: string
+    // title-level query ("title res") — cacheable per media; serves every
+    // episode of the show instead of re-fetching per episode number
+    pool?: boolean
+    // on a media-pool hit, this is the ONE query still fired per search (the
+    // most specific catch), everything else filters locally from the pool
+    supplement?: boolean
 }
 
 type Torrent = AnimeTorrent & { metadata: $habari.Metadata }
@@ -80,6 +89,15 @@ const ANILIST_TIMEOUT_S = 8
 const OP_CACHE_TTL_MS = 90 * 1000
 const OP_CACHE_MAX_ENTRIES = 32
 
+// media-level pool: the title-level RSS query for a show is cached per media
+// (id + resolution + sortBy) so browsing episodes reuses one broad fetch
+// instead of N episode-specific fetches. airing shows get a shorter TTL so a
+// fresh episode drop isn't hidden for long.
+const POOL_TTL_FINISHED_MS = 10 * 60 * 1000
+const POOL_TTL_RELEASING_MS = 3 * 60 * 1000
+const POOL_MAX_ENTRIES = 24
+const POOL_LIMIT = 100
+
 const TRACKERS = [
     "udp://tracker.opentrackr.org:1337/announce",
     "udp://open.stealth.si:80/announce",
@@ -104,6 +122,7 @@ class Provider {
     supportsAdult = false
 
     private _cache = new Map<string, { time: number, torrents: RawTorrent[] }>()
+    private _poolCache = new Map<string, { time: number, torrents: RawTorrent[] }>()
     private _absOffCache = new Map<number, { time: number, offset: number }>()
     private _opCache = new Map<string, { time: number, torrents: Torrent[] }>()
     // mirror ordering with penalty memory: failed mirrors sink to the back
@@ -164,9 +183,33 @@ class Provider {
                 return []
             }
 
-            // fan out all queries in parallel
-            const tRss = Date.now()
-            const results = await Promise.all(base.queries.map(async (q) => {
+            // ---- media-level pool -------------------------------------
+            // the title-only query ("Frieren 1080p") is cached per media so
+            // browsing episode 12 -> 13 -> 14 filters locally from the pool
+            // instead of re-fetching an episode-specific fan-out each time.
+            // on a hit, only the single "supplement" query fires per search.
+            const m = options.media
+            const poolQuery = base.queries.find(q => q.pool) || null
+            const mid = m.idMal || m.id || 0
+            const poolKey = !options.query && mid > 0 && poolQuery
+                ? String(mid) + "|" + (options.resolution || "") + "|" + poolQuery.sortBy
+                : ""
+            let poolTorrents: RawTorrent[] | null = null
+            if (poolKey && poolQuery) {
+                const hit = this._poolCache.get(poolKey)
+                const ttl = m.status === "RELEASING" ? POOL_TTL_RELEASING_MS : POOL_TTL_FINISHED_MS
+                if (hit && Date.now() - hit.time < ttl) {
+                    poolTorrents = hit.torrents
+                    console.log("nyaa-plus: media pool hit, " + poolTorrents.length + " torrents (ep " + options.episodeNumber + ", 0ms)")
+                }
+            }
+
+            // fan out in parallel: on a pool hit just the supplement query,
+            // otherwise everything except the pool query (fetched alongside)
+            const fanQueries = poolTorrents
+                ? base.queries.filter(q => !q.pool && q.supplement)
+                : base.queries.filter(q => !q.pool)
+            const fan = Promise.all(fanQueries.map(async (q) => {
                 try {
                     return await this.fetchRSS(q.query, q.sortBy)
                 } catch (e) {
@@ -174,7 +217,29 @@ class Provider {
                     return [] as RawTorrent[]
                 }
             }))
+            const poolFetch = (!poolTorrents && poolQuery)
+                ? this.fetchRSS(poolQuery.query, poolQuery.sortBy, POOL_LIMIT).catch((e) => {
+                    console.error("nyaa-plus: pool query failed (" + poolQuery.query + "): " + (e as Error).message)
+                    return null
+                })
+                : Promise.resolve(null)
+
+            const tRss = Date.now()
+            const [fanResults, poolRes] = await Promise.all([fan, poolFetch])
             const rssMs = Date.now() - tRss
+
+            if (poolRes && poolKey && poolRes.length > 0) {
+                poolTorrents = poolRes
+                this._poolCache.set(poolKey, { time: Date.now(), torrents: poolRes })
+                if (this._poolCache.size > POOL_MAX_ENTRIES) {
+                    const oldest = this._poolCache.keys().next().value
+                    if (oldest) this._poolCache.delete(oldest)
+                }
+            }
+
+            const results: RawTorrent[][] = []
+            if (poolTorrents) results.push(poolTorrents)
+            results.push(...fanResults)
 
             // absolute episode query fires once the offset resolves (usually
             // already done by now) and merges into the same pool
@@ -329,19 +394,20 @@ class Provider {
         }
     }
 
-    private buildURLFor(base: string, query: string, sortBy: string = "seeders"): string {
+    private buildURLFor(base: string, query: string, sortBy: string = "seeders", limit: number = 0): string {
         const cfg = this.getConfig()
-        const qs = "page=rss&q=" + encodeURIComponent(query) + "&c=" + cfg.category + "&f=" + cfg.filter + "&s=" + sortBy + "&o=desc"
+        let qs = "page=rss&q=" + encodeURIComponent(query) + "&c=" + cfg.category + "&f=" + cfg.filter + "&s=" + sortBy + "&o=desc"
+        if (limit > 0) qs += "&limit=" + limit
         return base + "/?" + qs
     }
 
-    private async fetchRSS(query: string, sortBy: string = "seeders"): Promise<RawTorrent[]> {
+    private async fetchRSS(query: string, sortBy: string = "seeders", limit: number = 0): Promise<RawTorrent[]> {
         // TTL cache — the UI re-triggers smart search with debounced values,
         // no point hammering nyaa for identical queries
         const cfg = this.getConfig()
         if (!this._mirrorOrder) this._mirrorOrder = [...cfg.baseUrls]
 
-        const cachedUrl = this.buildURLFor(this._mirrorOrder[0], query, sortBy)
+        const cachedUrl = this.buildURLFor(this._mirrorOrder[0], query, sortBy, limit)
         const hit = this._cache.get(cachedUrl)
         if (hit && Date.now() - hit.time < CACHE_TTL_MS) return hit.torrents
 
@@ -354,7 +420,7 @@ class Provider {
 
         for (let attempt = 0; attempt < attempts; attempt++) {
             const base = this._mirrorOrder[0]
-            const attemptUrl = this.buildURLFor(base, query, sortBy)
+            const attemptUrl = this.buildURLFor(base, query, sortBy, limit)
             try {
                 const res = await fetch(attemptUrl, { timeout: RSS_TIMEOUT_S })
                 if (!res.ok) throw new Error("HTTP " + res.status)
@@ -516,12 +582,13 @@ class Provider {
         return { queries: unique, absQuery: absQuery }
     }
 
-    // 1. Exact-phrase title group + episode (catches every language variant)
-    // 2. Shortest title + episode (broadest catch)
-    // 3. Season-qualified title + episode (if season > 1)
-    // 4. Part-qualified title + episode (if part > 1)
-    // 5. Alternative title + episode (different language/variant)
-    // 6. Absolute episode number (if the media uses absolute numbering)
+    // 1. Title-only pool query (cached per media, serves every episode)
+    // 2. Exact-phrase title group + episode (catches every language variant)
+    // 3. Shortest title + episode (broadest catch) [pool-hit supplement]
+    // 4. Season-qualified title + episode (if season > 1)
+    // 5. Part-qualified title + episode (if part > 1)
+    // 6. Alternative title + episode (different language/variant)
+    // 7. Absolute episode number (if the media uses absolute numbering)
     private buildEpisodeQueries(
         sorted: string[], season: number, part: number,
         episodeNumber: number, media: Media, resolution: string, absOffset: number = 0
@@ -534,12 +601,16 @@ class Provider {
         const offset = (media.absoluteSeasonOffset || 0) || absOffset
         const hasAbsoluteOffset = offset > 0
 
+        // broad title-level query — the media pool base. one fetch covers every
+        // episode of the show; episode-specific fan-out is skipped on pool hits.
+        queries.push({ query: primary + resStr, sortBy: "seeders", pool: true })
+
         const exactGroup = this.buildExactTitleGroup(media, epGroup + resStr)
         if (exactGroup) {
             queries.push({ query: exactGroup, sortBy: "seeders" })
         }
 
-        queries.push({ query: primary + " " + epGroup + resStr, sortBy: "seeders" })
+        queries.push({ query: primary + " " + epGroup + resStr, sortBy: "seeders", supplement: true })
 
         if (season > 1) {
             queries.push({ query: $scannerUtils.buildSeasonQuery(primary, season) + " " + epGroup + resStr, sortBy: "seeders" })
@@ -566,12 +637,12 @@ class Provider {
         return queries
     }
 
-    // 1. Exact-phrase group + batch terms (size)
-    // 2. Shortest title + batch terms (size)
-    // 3. Season/part-qualified + batch terms / disc terms
-    // 4. Shortest title + disc terms
-    // 5. Alternative title + batch terms
-    // 6. Title-only (size) — catches oddly-named packs
+    // 1. Title-only pool query (size, cached per media)
+    // 2. Exact-phrase group + batch terms (size)
+    // 3. Shortest title + batch terms (size) [pool-hit supplement]
+    // 4. Season/part-qualified + batch terms / disc terms
+    // 5. Shortest title + disc terms
+    // 6. Alternative title + batch terms
     private buildBatchQueries(
         sorted: string[], season: number, part: number,
         media: Media, resolution: string
@@ -583,12 +654,16 @@ class Provider {
         const batchTerms = this.buildBatchTerms(media)
         const discTerms = " (BD|Blu-ray|BDRip|Remux|HEVC|x265|10bit|Dual-Audio|Dual Audio)"
 
+        // broad title-level query — the media pool base (size-sorted here so
+        // the biggest packs surface; cached per media, reused across searches)
+        queries.push({ query: primary + resStr, sortBy: "size", pool: true })
+
         const exactGroup = this.buildExactTitleGroup(media, batchTerms + resStr)
         if (exactGroup) {
             queries.push({ query: exactGroup, sortBy: "size" })
         }
 
-        queries.push({ query: primary + batchTerms + resStr, sortBy: "size" })
+        queries.push({ query: primary + batchTerms + resStr, sortBy: "size", supplement: true })
 
         if (season > 1) {
             const seasonQ = $scannerUtils.buildSeasonQuery(primary, season)
@@ -604,11 +679,8 @@ class Provider {
             queries.push({ query: secondary + batchTerms + resStr, sortBy: "size" })
         }
 
-        queries.push({ query: primary + resStr, sortBy: "size" })
-
         return queries
     }
-
     private buildMovieQueries(sorted: string[], resolution: string): SmartQuery[] {
         const queries: SmartQuery[] = []
         const resStr = resolution ? " " + resolution : " (360|480|720|1080)"

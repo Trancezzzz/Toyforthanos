@@ -67,6 +67,7 @@ What's better than the stock provider:
 - **Query precedence fix (v2.1)** — episode/batch terms are ANDed onto *every* title variant, not just the last one
 - **Multi-language queries** — English, Romaji and Japanese synonyms are all queried and matched
 - **Performance (v2.4)** — AniList offset lookup starts in parallel with the RSS fan-out (no serialized AniList round-trip on cold searches), per-request timeouts (RSS 10s / AniList 8s vs the runtime's 35s default), and an op-level result cache so the UI's debounced repeat searches resolve in <50ms
+- **Media-level pool cache (v2.5)** — the title-only query for a show (`Frieren 1080p`, limit 100) is cached per media, so browsing episode 12 → 13 → 14 filters locally from the pool with a single supplement query instead of re-fetching a 6-query fan-out per episode. Airing shows get a short pool TTL so fresh episode drops surface quickly; finished shows 10 min
 
 > Tip: if you also have the built-in *Nyaa* provider installed, disable it in Settings → Extensions so `Nyaa+` is the default.
 

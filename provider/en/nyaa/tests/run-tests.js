@@ -183,6 +183,7 @@ async function main() {
     await scenario("smartSearch — batch mode (Bocchi the Rock!, FINISHED 12 eps)", async () => {
         const opts = {
             media: media({
+                idMal: 47917, // Bocchi the Rock!
                 romajiTitle: "Bocchi the Rock!",
                 englishTitle: "Bocchi the Rock!",
                 synonyms: ["ぼっち・ざ・ろっく！"],
@@ -234,6 +235,7 @@ async function main() {
     await scenario("smartSearch — numeric title guard ('86', ep 5) — season must not misfire", async () => {
         const opts = {
             media: media({
+                idMal: 41457, // 86 - Eighty Six
                 romajiTitle: "86",
                 englishTitle: "86 Eighty Six",
                 synonyms: ["エイティシックス"],
@@ -263,6 +265,7 @@ async function main() {
         // e.g. a show whose 3rd season continues numbering from the previous
         const opts = {
             media: media({
+                idMal: 42946, // Kingdom 3rd Season
                 romajiTitle: "Kingdom Season 3",
                 englishTitle: "Kingdom Season 3",
                 synonyms: ["キングダム 第3シリーズ"],
@@ -510,6 +513,42 @@ async function main() {
     })
 
     // ---------------------------------------------------------------
+    await scenario("media pool — browsing episodes reuses the title-level pool", async () => {
+        const pp = new providerModule.Provider()
+        const m = media({
+            idMal: 154587, // Frieren: Beyond Journey's End (S1, offset 0)
+            romajiTitle: "Sousou no Frieren",
+            englishTitle: "Frieren: Beyond Journey's End",
+            synonyms: ["葬送のフリーレン"],
+            episodeCount: 28, status: "FINISHED",
+            startDate: { year: 2023, month: 9, day: 29 },
+        })
+        const opts = ep => ({
+            media: m, query: "", batch: false, episodeNumber: ep, resolution: "",
+            anidbAID: 0, anidbEID: 0, bestReleases: false,
+        })
+        global.__fetchLog = []
+        const r1 = await pp.smartSearch(opts(12))
+        const firstFetches = global.__fetchLog.length
+        global.__fetchLog = []
+        const r2 = await pp.smartSearch(opts(13))
+        const secondFetches = global.__fetchLog.length
+        console.log("  (ep12: " + firstFetches + " fetches, ep13: " + secondFetches + " fetches)")
+        ok(r1.length > 0, "first episode search returned results", r1.length)
+        ok(r2.length > 0, "second episode search returned results", r2.length)
+        ok(secondFetches <= 3, "second episode reused the media pool (<=3 fetches)", secondFetches)
+        ok(firstFetches > secondFetches, "cold episode did the full fan-out", firstFetches + " vs " + secondFetches)
+        const eps1 = new Set(r1.map(t => t.episodeNumber))
+        const eps2 = new Set(r2.map(t => t.episodeNumber))
+        ok(eps2.has(13) && eps1.has(12), "each episode's own releases present", [...eps1].join(",") + " | " + [...eps2].join(","))
+        // identical episode right after — op-cache, near-zero fetches
+        global.__fetchLog = []
+        await pp.smartSearch(opts(13))
+        const thirdFetches = global.__fetchLog.length
+        ok(thirdFetches === 0, "identical episode served from op-cache (0 fetches)", thirdFetches)
+    })
+
+    // ---------------------------------------------------------------
     await scenario("exact title group — episode suffix ANDed onto EVERY variant", async () => {
         const g = provider.buildExactTitleGroup(media({
             romajiTitle: "Jujutsu Kaisen 2nd Season",
@@ -541,6 +580,7 @@ async function main() {
     await scenario("smartSearch — bestReleases filter", async () => {
         const opts = {
             media: media({
+                idMal: 47917, // Bocchi the Rock!
                 romajiTitle: "Bocchi the Rock!",
                 englishTitle: "Bocchi the Rock!",
                 synonyms: ["ぼっち・ざ・ろっく！"],
@@ -677,6 +717,7 @@ async function main() {
     await scenario("cache — repeated query hits TTL cache", async () => {
         const opts = {
             media: media({
+                idMal: 154587, // Frieren: Beyond Journey's End
                 romajiTitle: "Sousou no Frieren",
                 englishTitle: "Frieren: Beyond Journey's End",
                 synonyms: ["葬送のフリーレン"],
