@@ -143,7 +143,11 @@ function habariParse(filename) {
     }
     m = name.match(/[\(\[]\s*(\d{3,4})\s*[\)\]]/)
     if (m && !meta.video_resolution) {
-        meta.video_resolution = m[1]
+        // bare numbers in parens are often years ([2024]) — only accept
+        // known resolutions
+        if (/^(2160|1440|1080|720|540|480|360)$/.test(m[1])) {
+            meta.video_resolution = m[1]
+        }
     }
     m = name.match(/[\(\[]\s*(Multi-Subs|English|Spanish|Português|Japanese|Sub)\s*[\)\]]/i)
     if (m) {

@@ -144,7 +144,31 @@ class Provider {
 
     async search(options: AnimeSearchOptions): Promise<AnimeTorrent[]> {
         try {
-            const raw = await this.fetchRSS(options.query, "seeders")
+            const q = (options.query || "").trim()
+            const mid = options.media.idMal || options.media.id || 0
+
+            // media-based search (show selected, no typed query): reuse the
+            // media pool so the search drawer shares the same cached title-level
+            // fetch as episode browsing
+            if (!q && mid > 0) {
+                const base = this.buildSmartSearchQueries({
+                    media: options.media, query: "", batch: false, episodeNumber: 0,
+                    resolution: "", anidbAID: 0, anidbEID: 0, bestReleases: false,
+                }, 0)
+                const poolQuery = base.queries.find(x => x.pool) || null
+                if (poolQuery) {
+                    const key = String(mid) + "||" + poolQuery.sortBy
+                    const pool = await this.ensureMediaPool(poolQuery, key, options.media.status === "RELEASING")
+                    if (pool) {
+                        const torrents = pool.slice(0, this.getConfig().maxResults).map(t => this.toAnimeTorrent(t))
+                        torrents.sort(this.compareTorrents)
+                        console.log("nyaa-plus: " + torrents.length + " pool results for '" + (options.media.romajiTitle || options.media.englishTitle || "") + "'")
+                        return torrents
+                    }
+                }
+            }
+
+            const raw = await this.fetchRSS(q, "seeders")
             const torrents = raw.slice(0, this.getConfig().maxResults).map(t => this.toAnimeTorrent(t))
             torrents.sort(this.compareTorrents)
             console.log("nyaa-plus: " + torrents.length + " results for '" + options.query + "'")
@@ -194,21 +218,17 @@ class Provider {
             const poolKey = !options.query && mid > 0 && poolQuery
                 ? String(mid) + "|" + (options.resolution || "") + "|" + poolQuery.sortBy
                 : ""
-            let poolTorrents: RawTorrent[] | null = null
-            if (poolKey && poolQuery) {
-                const hit = this._poolCache.get(poolKey)
-                const ttl = m.status === "RELEASING" ? POOL_TTL_RELEASING_MS : POOL_TTL_FINISHED_MS
-                if (hit && Date.now() - hit.time < ttl) {
-                    poolTorrents = hit.torrents
-                    console.log("nyaa-plus: media pool hit, " + poolTorrents.length + " torrents (ep " + options.episodeNumber + ", 0ms)")
-                }
+            const poolTtl = m.status === "RELEASING" ? POOL_TTL_RELEASING_MS : POOL_TTL_FINISHED_MS
+            const poolCached = poolKey ? this._poolCache.get(poolKey) : undefined
+            const poolHit = !!(poolCached && Date.now() - poolCached.time < poolTtl)
+            if (poolHit) {
+                console.log("nyaa-plus: media pool hit, " + poolCached!.torrents.length + " torrents (ep " + options.episodeNumber + ", 0ms)")
             }
 
             // fan out in parallel: on a pool hit just the supplement query,
-            // otherwise everything except the pool query (fetched alongside)
-            const fanQueries = poolTorrents
-                ? base.queries.filter(q => !q.pool && q.supplement)
-                : base.queries.filter(q => !q.pool)
+            // otherwise everything except the pool query (fetched alongside).
+            // the pool itself is ensured concurrently either way.
+            const fanQueries = base.queries.filter(q => !q.pool && (!poolHit || q.supplement))
             const fan = Promise.all(fanQueries.map(async (q) => {
                 try {
                     return await this.fetchRSS(q.query, q.sortBy)
@@ -217,28 +237,16 @@ class Provider {
                     return [] as RawTorrent[]
                 }
             }))
-            const poolFetch = (!poolTorrents && poolQuery)
-                ? this.fetchRSS(poolQuery.query, poolQuery.sortBy, POOL_LIMIT).catch((e) => {
-                    console.error("nyaa-plus: pool query failed (" + poolQuery.query + "): " + (e as Error).message)
-                    return null
-                })
-                : Promise.resolve(null)
+            const poolFetch = this.ensureMediaPool(poolQuery, poolKey, m.status === "RELEASING")
 
             const tRss = Date.now()
             const [fanResults, poolRes] = await Promise.all([fan, poolFetch])
             const rssMs = Date.now() - tRss
 
-            if (poolRes && poolKey && poolRes.length > 0) {
-                poolTorrents = poolRes
-                this._poolCache.set(poolKey, { time: Date.now(), torrents: poolRes })
-                if (this._poolCache.size > POOL_MAX_ENTRIES) {
-                    const oldest = this._poolCache.keys().next().value
-                    if (oldest) this._poolCache.delete(oldest)
-                }
-            }
-
+            // pool results merge in regardless of caching (id-less media still
+            // get the broad title-level coverage); only keyed media store it
             const results: RawTorrent[][] = []
-            if (poolTorrents) results.push(poolTorrents)
+            if (poolRes) results.push(poolRes)
             results.push(...fanResults)
 
             // absolute episode query fires once the offset resolves (usually
@@ -394,6 +402,33 @@ class Provider {
         }
     }
 
+    // media-level pool: serve the cached title-level results for a media, or
+    // fetch (and cache, when keyed) the broad query. returns null on failure.
+    private async ensureMediaPool(poolQuery: SmartQuery | null, poolKey: string, releasing: boolean): Promise<RawTorrent[] | null> {
+        if (!poolQuery) return null
+
+        const ttl = releasing ? POOL_TTL_RELEASING_MS : POOL_TTL_FINISHED_MS
+        if (poolKey) {
+            const hit = this._poolCache.get(poolKey)
+            if (hit && Date.now() - hit.time < ttl) return hit.torrents
+        }
+
+        const raw = await this.fetchRSS(poolQuery.query, poolQuery.sortBy, POOL_LIMIT).catch((e) => {
+            console.error("nyaa-plus: pool query failed (" + poolQuery.query + "): " + (e as Error).message)
+            return null
+        })
+
+        if (raw && poolKey && raw.length > 0) {
+            this._poolCache.set(poolKey, { time: Date.now(), torrents: raw })
+            if (this._poolCache.size > POOL_MAX_ENTRIES) {
+                const oldest = this._poolCache.keys().next().value
+                if (oldest) this._poolCache.delete(oldest)
+            }
+        }
+
+        return raw
+    }
+
     private buildURLFor(base: string, query: string, sortBy: string = "seeders", limit: number = 0): string {
         const cfg = this.getConfig()
         let qs = "page=rss&q=" + encodeURIComponent(query) + "&c=" + cfg.category + "&f=" + cfg.filter + "&s=" + sortBy + "&o=desc"
@@ -544,8 +579,16 @@ class Provider {
 
         if (titles.length === 0) return { queries: [], absQuery: null }
 
+        // nyaa's search cannot match CJK (even an exact Japanese title returns
+        // 0 rows), so queries are built from latin-script titles; Japanese
+        // variants still participate inside the exact-phrase title group,
+        // where the latin members carry the query. CJK-only media fall back
+        // to the raw list (their queries will be empty, but that's nyaa).
+        const cjkRe = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/
+        const latinTitles = titles.filter(t => !cjkRe.test(t))
+
         // shorter titles are less restrictive -> higher priority
-        const sorted = [...titles].sort((a, b) => a.length - b.length)
+        const sorted = [...(latinTitles.length > 0 ? latinTitles : titles)].sort((a, b) => a.length - b.length)
 
         const isMovie = media.format === "MOVIE" && (media.episodeCount || 0) === 1
         const canBatch = media.status === "FINISHED" && (media.episodeCount || 0) > 0
@@ -728,7 +771,12 @@ class Provider {
 
             // --- batch: must look like a batch ---
             if (batch) {
-                const isBatch = t.isBatch || (ep === -1 && this.torrentMatchesMedia(t, media, 0.55, queryTitle))
+                // ep-less fallback only counts when the name actually says
+                // batch/complete/range — a bare title match isn't a pack
+                const isBatch = t.isBatch
+                    || (ep === -1
+                        && (this.isTorrentLikelyBatch(t.name) || this.torrentContainsCompleteKeywords(t.name))
+                        && this.torrentMatchesMedia(t, media, 0.55, queryTitle))
                 if (!isBatch) return false
                 if (ep > 0) return false // single-episode torrents are not batches
                 if (!this.torrentMatchesMedia(t, media, titleThreshold, queryTitle)) return false

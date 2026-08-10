@@ -546,6 +546,14 @@ async function main() {
         await pp.smartSearch(opts(13))
         const thirdFetches = global.__fetchLog.length
         ok(thirdFetches === 0, "identical episode served from op-cache (0 fetches)", thirdFetches)
+
+        // search() with the same media and no typed query reuses the pool
+        global.__fetchLog = []
+        const sres = await pp.search({ media: m, query: "" })
+        const searchFetches = global.__fetchLog.length
+        console.log("  (search(): " + searchFetches + " fetches, " + sres.length + " results)")
+        ok(sres.length > 0, "media-based search returns results", sres.length)
+        ok(searchFetches === 0, "search() served from the media pool (0 fetches)", searchFetches)
     })
 
     // ---------------------------------------------------------------
