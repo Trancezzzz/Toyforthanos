@@ -785,10 +785,20 @@ class Provider {
                         && (this.isTorrentLikelyBatch(t.name) || this.torrentContainsCompleteKeywords(t.name))
                         && this.torrentMatchesMedia(t, media, 0.55, queryTitle))
                 if (!isBatch) return false
-                if (ep > 0) return false // single-episode torrents are not batches
+                // single-episode torrents are not batches — unless the name
+                // carries an explicit range ("01 - 12") that habari may have
+                // reduced to one number
+                if (ep > 0 && !this.isTorrentLikelyBatch(t.name)) return false
                 if (!this.torrentMatchesMedia(t, media, titleThreshold, queryTitle)) return false
                 if (!this.torrentAfterDate(t, minDate)) return false
                 if (this.torrentContainsCompleteKeywords(t.name)) return true
+                // a pack with an explicit range must cover the media's episode
+                // count (matches the base provider); "01-06" of a 12-episode
+                // show is not a batch worth offering
+                if (media.episodeCount > 0) {
+                    const ends = this.packRangeEnds(t.name)
+                    if (ends.length > 0 && !ends.some(e => e >= media.episodeCount)) return false
+                }
                 return this.verifySeasonAndPart(t, media, expectedSeason, expectedPart, hasAbsoluteOffset)
             }
 
@@ -1214,7 +1224,20 @@ class Provider {
     }
 
     private torrentContainsCompleteKeywords(name: string): boolean {
-        return /\bcomplete\s+(?:series|collection)\b/i.test(name)
+        return /\bcomplete\b/i.test(name)
+    }
+
+    // all episode-range ends in a pack name, e.g. "01-12" -> [12],
+    // "(01-06) + (07-12)" -> [6, 12]
+    private packRangeEnds(name: string): number[] {
+        const ends: number[] = []
+        const re = /\bE?0*(\d{1,3})\s*[-~]\s*E?0*(\d{1,3})\b/gi
+        let m: RegExpExecArray | null
+        while ((m = re.exec(name)) !== null) {
+            const s = parseInt(m[1], 10), e = parseInt(m[2], 10)
+            if (e > s && e <= 300) ends.push(e)
+        }
+        return ends
     }
 
     // extract the season range from multi-season packs, e.g. "S01-S03" or "Complete Series"
@@ -1266,6 +1289,11 @@ class Provider {
         titles = [...new Set(titles)]
         if (titles.length === 0) return ""
 
+        // a single-variant group can silently drop whatever follows it on
+        // nyaa ("(\"86\")(\"Batch\"|...) returns everything with \"86\" in it,
+        // suffix ignored); duplicating the variant keeps the group honest
+        if (titles.length === 1) titles.push(titles[0])
+
         return "(" + titles.map(t => '"' + t + '"').join("|") + ")"
     }
 
@@ -1287,13 +1315,14 @@ class Provider {
     private buildBatchTerms(media: Media): string {
         const epCount = this.zeropad(media.episodeCount || 0)
         const parts = [
+            '"01 - ' + epCount + '"',
+            '"01 ~ ' + epCount + '"',
             '"Batch"',
             '"Complete"',
             '"Complete Series"',
             '"Complete Collection"',
-            '"01 - ' + epCount + '"',
-            '"01-' + epCount + '"',
-            '"E01-E' + epCount + '"',
+            '"Seasons"',
+            '"Parts"',
         ]
         return " (" + parts.join("|") + ")"
     }
