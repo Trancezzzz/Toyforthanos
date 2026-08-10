@@ -32,8 +32,15 @@ function httpRequest(url, method = "GET", body = null, headers = {}, timeoutMs =
 // ------------------------------------------------------------------
 // fetch — mimics Seanime's goja fetch: awaitable, res.text() is SYNC
 // ------------------------------------------------------------------
+global.__fetchLog = []
 global.fetch = async function (url, options) {
     options = options || {}
+    global.__fetchLog.push({ url, timeout: options.timeout, t: Date.now() })
+    // simulate the AniList round-trip lag so the parallel-start behavior
+    // (queries fired while the offset resolves) is actually exercised
+    if (String(url).includes("graphql.anilist.co")) {
+        await new Promise(r => setTimeout(r, 400))
+    }
     const method = String(options.method || "GET").toUpperCase()
     let body = null
     if (options.body && typeof options.body === "string") body = options.body

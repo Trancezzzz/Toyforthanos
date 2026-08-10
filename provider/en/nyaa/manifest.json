@@ -1,9 +1,9 @@
 {
   "id": "nyaa-plus",
   "name": "Nyaa+",
-  "description": "Improved Nyaa provider — multi-language smart search (English, Romaji, Japanese), accurate season/episode handling, all smart-search options (batch, episode, resolution, query, best releases), instant magnets from RSS info hashes, mirror failover, live AniList episode-offset derivation (cracks SubsPlease-style continuing numbering, incl. markerless sequels), quality preferences (resolution/dual-audio), freshness-aware ordering for airing shows. Drop-in upgrade for the built-in Nyaa provider.",
+  "description": "Improved Nyaa provider — multi-language smart search (English, Romaji, Japanese), accurate season/episode handling, all smart-search options (batch, episode, resolution, query, best releases), instant magnets from RSS info hashes, mirror failover, live AniList episode-offset derivation (cracks SubsPlease-style continuing numbering, incl. markerless sequels), quality preferences (resolution/dual-audio/groups), batch complete-pack preference, op-level result cache, per-request timeouts, freshness-aware ordering for airing shows. Drop-in upgrade for the built-in Nyaa provider.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/nyaa/manifest.json",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "semverConstraint": ">= 3.5.1",
   "author": "Trancezzz",
   "type": "anime-torrent-provider",
@@ -49,6 +49,12 @@
         "label": "Prefer dual-audio releases when picking best (true/false)",
         "type": "text",
         "default": "false"
+      },
+      {
+        "name": "preferredGroups",
+        "label": "Preferred release groups for best-releases (comma-separated, e.g. SubsPlease,Erai-raws)",
+        "type": "text",
+        "default": ""
       }
     ]
   },

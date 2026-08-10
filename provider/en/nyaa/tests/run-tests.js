@@ -26,6 +26,8 @@ const dualAudioSrc = providerSrc.split('"{{preferDualAudio}}"').join('"true"')
 const dualAudioModule = compileProvider(dualAudioSrc)
 const resAndDualSrc = dualAudioSrc.split('"{{preferredResolution}}"').join('"1080"')
 const resAndDualModule = compileProvider(resAndDualSrc)
+const groupsSrc = providerSrc.split('"{{preferredGroups}}"').join('"Yameii"')
+const groupsModule = compileProvider(groupsSrc)
 
 let pass = 0
 let fail = 0
@@ -417,6 +419,97 @@ async function main() {
     })
 
     // ---------------------------------------------------------------
+    await scenario("batch complete-pack dedupe — full pack beats same group's partial splits", async () => {
+        const mk = (name, seeders, hash) => provider.toAnimeTorrent({
+            name, link: "https://nyaa.si/view/1", downloadUrl: "", date: "Sat, 02 Mar 2024 14:00:00 +0000", seeders: String(seeders), leechers: "0", downloads: "0",
+            infoHash: hash, size: "8.0 GiB",
+            metadata: { title: name, formatted_title: name },
+        })
+        const complete = mk("[SubsPlease] Frieren - 01-12 (1080p) [C1]", 900, "l".repeat(40))
+        const splitA = mk("[SubsPlease] Frieren - 01-06 (1080p) [S1]", 500, "m".repeat(40))
+        const splitB = mk("[SubsPlease] Frieren - 07-12 (1080p) [S2]", 400, "n".repeat(40))
+        ok(provider.packRangeSize(complete.name) === 12, "pack range 12 detected", provider.packRangeSize(complete.name))
+        ok(provider.packRangeSize(splitA.name) === 6, "partial range 6 detected")
+        ok(provider.packRangeSize("[X] Foo Complete Series") === 999, "Complete Series = 999")
+        ok(provider.packRangeSize("[X] Foo - 05") === 0, "single episode = 0")
+        provider.markBestReleases([complete, splitA, splitB])
+        ok(complete.isBestRelease === true, "complete pack flagged best")
+        ok(splitA.isBestRelease === false && splitB.isBestRelease === false, "partial splits not best", [splitA.isBestRelease, splitB.isBestRelease])
+
+        // a different group's pack must NOT be punished by SubsPlease's split
+        const otherGroup = mk("[Erai-raws] Frieren - 01-12 (1080p) [E1]", 800, "o".repeat(40))
+        provider.markBestReleases([complete, otherGroup])
+        ok(otherGroup.isBestRelease === true, "other group's complete pack also best")
+    })
+
+    // ---------------------------------------------------------------
+    await scenario("preferredGroups — named groups win ties in bestReleases", async () => {
+        const gp = new groupsModule.Provider()
+        const mk = (name, seeders, hash) => gp.toAnimeTorrent({
+            name, link: "", downloadUrl: "", date: "", seeders: String(seeders), leechers: "0", downloads: "0",
+            infoHash: hash, size: "1.0 GiB",
+            metadata: { title: name, formatted_title: name },
+        })
+        const yameii = mk("[Yameii] Frieren - 12 (1080p) [Y1]", 200, "p".repeat(40))
+        const subsplease = mk("[SubsPlease] Frieren - 12 (1080p) [S1]", 900, "q".repeat(40))
+        gp.markBestReleases([yameii, subsplease])
+        ok(yameii.isBestRelease === true && subsplease.isBestRelease === false, "Yameii preferred over higher-seeded SubsPlease", [yameii.isBestRelease, subsplease.isBestRelease])
+    })
+
+    // ---------------------------------------------------------------
+    await scenario("performance — timeouts set, parallel AniList, op-cache", async () => {
+        // fresh instance: no RSS/offset/op cache, forces the true cold path
+        const pp = new providerModule.Provider()
+        global.__fetchLog = []
+        const t0 = Date.now()
+        const torrents = await pp.smartSearch({
+            media: media({
+                idMal: 51009,
+                romajiTitle: "Jujutsu Kaisen 2nd Season",
+                englishTitle: "Jujutsu Kaisen Season 2",
+                synonyms: ["呪術廻戦 第2期"],
+                episodeCount: 23, status: "FINISHED",
+                startDate: { year: 2023, month: 7, day: 6 },
+            }),
+            query: "", batch: false, episodeNumber: 8, resolution: "",
+            anidbAID: 0, anidbEID: 0, bestReleases: false,
+        })
+        const coldMs = Date.now() - t0
+        const rssCalls = global.__fetchLog.filter(f => !String(f.url).includes("graphql"))
+        const anilistCalls = global.__fetchLog.filter(f => String(f.url).includes("graphql"))
+        ok(rssCalls.length > 0, "RSS queries fired")
+        ok(rssCalls.every(f => f.timeout === 10), "RSS fetches carry 10s timeout", rssCalls.map(f => f.timeout))
+        ok(anilistCalls.length >= 1 && anilistCalls.every(f => f.timeout === 8), "AniList fetch carries 8s timeout", anilistCalls.map(f => f.timeout))
+        // parallel-start proof: the AniList call must BEGIN while the RSS fan-out
+        // is still in flight (serialized would start it after the last RSS fetch)
+        const rssStart = Math.min(...rssCalls.map(f => f.t))
+        const rssLastStart = Math.max(...rssCalls.map(f => f.t))
+        const aniStart = Math.min(...anilistCalls.map(f => f.t))
+        console.log("  (cold " + coldMs + "ms, anilist started " + (aniStart - rssStart) + "ms in, last RSS started " + (rssLastStart - rssStart) + "ms in)")
+        ok(aniStart < rssLastStart, "AniList offset lookup ran parallel to the RSS fan-out", "anilist@+" + (aniStart - rssStart) + "ms vs rssLast@+" + (rssLastStart - rssStart) + "ms")
+        ok(coldMs < 5000, "no hangs on cold path", coldMs + "ms")
+        ok(torrents.some(t => /SubsPlease/.test(t.name) && t.episodeNumber === 32), "absolute releases merged AFTER offset resolved")
+
+        // identical options again → op-cache serves the filtered result
+        const t1 = Date.now()
+        const again = await pp.smartSearch({
+            media: media({
+                idMal: 51009,
+                romajiTitle: "Jujutsu Kaisen 2nd Season",
+                englishTitle: "Jujutsu Kaisen Season 2",
+                synonyms: ["呪術廻戦 第2期"],
+                episodeCount: 23, status: "FINISHED",
+                startDate: { year: 2023, month: 7, day: 6 },
+            }),
+            query: "", batch: false, episodeNumber: 8, resolution: "",
+            anidbAID: 0, anidbEID: 0, bestReleases: false,
+        })
+        const warmMs = Date.now() - t1
+        ok(warmMs < 50, "op-cache serves repeated search in <50ms", warmMs + "ms")
+        ok(again.length === torrents.length, "cached result identical")
+    })
+
+    // ---------------------------------------------------------------
     await scenario("exact title group — episode suffix ANDed onto EVERY variant", async () => {
         const g = provider.buildExactTitleGroup(media({
             romajiTitle: "Jujutsu Kaisen 2nd Season",
@@ -488,7 +581,10 @@ async function main() {
         ok(/^magnet:\?xt=urn:btih:/.test(magnet), "magnet format", magnet.slice(0, 60))
         ok(magnet.includes("&tr="), "has trackers")
         const trCount = (magnet.match(/&tr=/g) || []).length
-        ok(trCount >= 8, "8 public trackers for swarm health", trCount)
+        ok(trCount >= 14, "14 public trackers for swarm health", trCount)
+        ok(magnet.includes("bt1.archive.org"), "archive.org tracker included")
+        const uniqueTrs = new Set(magnet.match(/&tr=[^&]*/g))
+        ok(uniqueTrs.size === trCount, "no duplicate trackers")
         ok(magnet.includes("&dn="), "has display name")
     })
 

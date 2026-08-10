@@ -32,6 +32,7 @@ interface ProviderConfig {
     maxResults: number
     preferredResolution: string
     preferDualAudio: boolean
+    preferredGroups: string[]
 }
 
 interface RawTorrent {
@@ -60,12 +61,24 @@ const DEFAULT_FILTER = "0"
 const DEFAULT_MAX_RESULTS = 60
 const DEFAULT_PREFERRED_RESOLUTION = ""
 const DEFAULT_PREFER_DUAL_AUDIO = "false"
+const DEFAULT_PREFERRED_GROUPS = ""
 
 const CACHE_TTL_MS = 3 * 60 * 1000
 const CACHE_MAX_ENTRIES = 24
 
 const ABS_OFFSET_TTL_MS = 24 * 60 * 60 * 1000
 const MAX_MIRROR_ATTEMPTS = 5
+
+// per-request timeouts (seconds) — the runtime default is 35s, which makes a
+// black-holed mirror cost half a minute before failover rotates
+const RSS_TIMEOUT_S = 10
+const ANILIST_TIMEOUT_S = 8
+
+// filtered-result cache: the UI re-fires smartSearch with debounced values,
+// so identical option sets are served from memory (~0ms) instead of
+// re-running parse + filter + AniList
+const OP_CACHE_TTL_MS = 90 * 1000
+const OP_CACHE_MAX_ENTRIES = 32
 
 const TRACKERS = [
     "udp://tracker.opentrackr.org:1337/announce",
@@ -76,6 +89,13 @@ const TRACKERS = [
     "udp://tracker.tiny-vps.com:6969/announce",
     "udp://tracker.moeking.me:6969/announce",
     "udp://tracker.pomf.se:80/announce",
+    // verified reachable at add time (probed 2026-08)
+    "udp://bt1.archive.org:6969/announce",
+    "http://bt1.archive.org:6969/announce",
+    "udp://open.demonii.si:1337/announce",
+    "http://open.demonii.si:1337/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://1337.abcvg.info:80/announce",
 ]
 
 //@ts-ignore
@@ -85,7 +105,9 @@ class Provider {
 
     private _cache = new Map<string, { time: number, torrents: RawTorrent[] }>()
     private _absOffCache = new Map<number, { time: number, offset: number }>()
-    private _mirrorIdx = 0
+    private _opCache = new Map<string, { time: number, torrents: Torrent[] }>()
+    // mirror ordering with penalty memory: failed mirrors sink to the back
+    private _mirrorOrder: string[] | null = null
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -115,27 +137,36 @@ class Provider {
     }
 
     async smartSearch(options: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
+        const tStart = Date.now()
         try {
+            // op-level cache: the UI re-fires identical smart searches while
+            // debouncing — serve the already-filtered result instead of
+            // re-running parse + filter + AniList
+            const opKey = this.buildOpCacheKey(options)
+            const opHit = this._opCache.get(opKey)
+            if (opHit && Date.now() - opHit.time < OP_CACHE_TTL_MS) {
+                console.log("nyaa-plus: op-cache hit, " + opHit.torrents.length + " torrents in " + (Date.now() - tStart) + "ms")
+                return opHit.torrents
+            }
+
             // derive an absolute episode offset from AniList whenever the media
             // doesn't already carry one. catches BOTH marker-qualified sequels
             // ("Jujutsu Kaisen 2nd Season") and markerless ones ("Kaguya-sama:
-            // Love Is War? Ultra Romantic") — AniList's relation graph is the
-            // source of truth for "is this season 2+". first entry / movie
-            // searches return offset 0 and skip the extra query.
-            let absOffset = 0
-            if (options.episodeNumber && options.episodeNumber > 0
-                && !((options.media.absoluteSeasonOffset || 0) > 0)) {
-                absOffset = await this.getAnilistSeasonOffset(options.media)
-            }
+            // Love Is War? Ultra Romantic"). STARTED IN PARALLEL with the RSS
+            // fan-out so a cold AniList round-trip doesn't serialize on top.
+            const needsOffset = !!(options.episodeNumber && options.episodeNumber > 0)
+                && !((options.media.absoluteSeasonOffset || 0) > 0)
+            const offPromise = needsOffset ? this.getAnilistSeasonOffset(options.media) : Promise.resolve(0)
 
-            const queries = this.buildSmartSearchQueries(options, absOffset)
-            if (!queries || queries.length === 0) {
+            const base = this.buildSmartSearchQueries(options, 0)
+            if (!base.queries || base.queries.length === 0) {
                 console.warn("nyaa-plus: smart search: no queries generated")
                 return []
             }
 
             // fan out all queries in parallel
-            const results = await Promise.all(queries.map(async (q) => {
+            const tRss = Date.now()
+            const results = await Promise.all(base.queries.map(async (q) => {
                 try {
                     return await this.fetchRSS(q.query, q.sortBy)
                 } catch (e) {
@@ -143,6 +174,24 @@ class Provider {
                     return [] as RawTorrent[]
                 }
             }))
+            const rssMs = Date.now() - tRss
+
+            // absolute episode query fires once the offset resolves (usually
+            // already done by now) and merges into the same pool
+            const tAni = Date.now()
+            const absOffset = await offPromise
+            const aniMs = Date.now() - tAni
+            if (absOffset > 0) {
+                const withAbs = this.buildSmartSearchQueries(options, absOffset)
+                if (withAbs.absQuery) {
+                    try {
+                        const extra = await this.fetchRSS(withAbs.absQuery.query, withAbs.absQuery.sortBy)
+                        results.push(extra)
+                    } catch (e) {
+                        console.error("nyaa-plus: absolute query failed: " + (e as Error).message)
+                    }
+                }
+            }
 
             // dedupe by info hash (then by download URL)
             const unique = new Map<string, RawTorrent>()
@@ -153,7 +202,7 @@ class Provider {
             }
 
             let torrents = [...unique.values()].map(t => this.toAnimeTorrent(t))
-            console.log("nyaa-plus: " + torrents.length + " unique before filtering")
+            console.log("nyaa-plus: " + torrents.length + " unique before filtering (rss " + rssMs + "ms, anilist " + aniMs + "ms)")
 
             torrents = this.filterSmartResults(torrents, options, absOffset)
 
@@ -167,12 +216,31 @@ class Provider {
             const releasing = options.media.status === "RELEASING" && !options.batch && (options.episodeNumber || 0) > 0
             this.sortTorrents(torrents, releasing)
 
-            console.log("nyaa-plus: " + torrents.length + " torrents after filtering")
+            this._opCache.set(opKey, { time: Date.now(), torrents })
+            if (this._opCache.size > OP_CACHE_MAX_ENTRIES) {
+                const oldest = this._opCache.keys().next().value
+                if (oldest) this._opCache.delete(oldest)
+            }
+
+            console.log("nyaa-plus: " + torrents.length + " torrents after filtering in " + (Date.now() - tStart) + "ms")
             return torrents
         } catch (error) {
             console.error("nyaa-plus: smartSearch error: " + (error as Error).message)
             return []
         }
+    }
+
+    private buildOpCacheKey(options: AnimeSmartSearchOptions): string {
+        const m = options.media
+        return [
+            m.idMal || m.id || 0,
+            m.status || "",
+            options.episodeNumber || 0,
+            options.batch ? 1 : 0,
+            options.resolution || "",
+            options.bestReleases ? 1 : 0,
+            options.query || "",
+        ].join("|")
     }
 
     async getTorrentInfoHash(torrent: AnimeTorrent): Promise<string> {
@@ -247,6 +315,9 @@ class Provider {
         let preferDualAudio = "{{preferDualAudio}}"
         if (!preferDualAudio || preferDualAudio.startsWith("{{")) preferDualAudio = DEFAULT_PREFER_DUAL_AUDIO
 
+        let preferredGroups = "{{preferredGroups}}"
+        if (!preferredGroups || preferredGroups.startsWith("{{")) preferredGroups = DEFAULT_PREFERRED_GROUPS
+
         return {
             baseUrls: baseUrls,
             category: category,
@@ -254,12 +325,12 @@ class Provider {
             maxResults: maxResults,
             preferredResolution: preferredResolution.trim(),
             preferDualAudio: preferDualAudio.toLowerCase() === "true",
+            preferredGroups: preferredGroups.split(",").map(g => g.trim().toLowerCase()).filter(g => g.length > 0),
         }
     }
 
-    private buildURL(query: string, sortBy: string = "seeders"): string {
+    private buildURLFor(base: string, query: string, sortBy: string = "seeders"): string {
         const cfg = this.getConfig()
-        const base = cfg.baseUrls[this._mirrorIdx % cfg.baseUrls.length]
         const qs = "page=rss&q=" + encodeURIComponent(query) + "&c=" + cfg.category + "&f=" + cfg.filter + "&s=" + sortBy + "&o=desc"
         return base + "/?" + qs
     }
@@ -267,20 +338,25 @@ class Provider {
     private async fetchRSS(query: string, sortBy: string = "seeders"): Promise<RawTorrent[]> {
         // TTL cache — the UI re-triggers smart search with debounced values,
         // no point hammering nyaa for identical queries
-        const url = this.buildURL(query, sortBy)
-        const hit = this._cache.get(url)
+        const cfg = this.getConfig()
+        if (!this._mirrorOrder) this._mirrorOrder = [...cfg.baseUrls]
+
+        const cachedUrl = this.buildURLFor(this._mirrorOrder[0], query, sortBy)
+        const hit = this._cache.get(cachedUrl)
         if (hit && Date.now() - hit.time < CACHE_TTL_MS) return hit.torrents
 
-        // mirror failover: try the current mirror, rotate on failure, retry.
-        // the working mirror is remembered for the next call.
-        const mirrors = this.getConfig().baseUrls
-        const attempts = Math.min(mirrors.length, MAX_MIRROR_ATTEMPTS)
+        // mirror failover with penalty memory: try mirrors in order of
+        // preference; a failed mirror sinks to the back of the rotation so
+        // every subsequent search doesn't re-hang on it. per-request timeout
+        // keeps a black-holed mirror to ~10s instead of the runtime's 35s.
+        const attempts = Math.min(this._mirrorOrder.length, MAX_MIRROR_ATTEMPTS)
         let lastError: Error | null = null
 
         for (let attempt = 0; attempt < attempts; attempt++) {
-            const attemptUrl = this.buildURL(query, sortBy)
+            const base = this._mirrorOrder[0]
+            const attemptUrl = this.buildURLFor(base, query, sortBy)
             try {
-                const res = await fetch(attemptUrl)
+                const res = await fetch(attemptUrl, { timeout: RSS_TIMEOUT_S })
                 if (!res.ok) throw new Error("HTTP " + res.status)
                 const torrents = this.parseRSSFeed(res.text())
 
@@ -290,12 +366,15 @@ class Provider {
                     if (oldest) this._cache.delete(oldest)
                 }
 
-                if (attempt > 0) console.log("nyaa-plus: using mirror " + (this._mirrorIdx % mirrors.length) + " (" + this.getConfig().baseUrls[this._mirrorIdx % mirrors.length] + ")")
+                if (attempt > 0) console.log("nyaa-plus: using mirror " + base)
                 return torrents
             } catch (e) {
                 lastError = e as Error
-                console.error("nyaa-plus: mirror " + (this._mirrorIdx % mirrors.length) + " failed for '" + query + "': " + (e as Error).message)
-                this._mirrorIdx = (this._mirrorIdx + 1) % mirrors.length
+                console.error("nyaa-plus: mirror " + base + " failed for '" + query + "': " + (e as Error).message)
+                // sink the failed mirror to the back of the rotation so it
+                // costs at most one attempt per search, not every search
+                this._mirrorOrder.splice(0, 1)
+                this._mirrorOrder.push(base)
             }
         }
 
@@ -330,6 +409,7 @@ class Provider {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Accept: "application/json" },
                 body: JSON.stringify({ query: "query ($id: Int) { " + query + " }", variables: { id: key } }),
+                timeout: ANILIST_TIMEOUT_S,
             })
             if (!res.ok) throw new Error("HTTP " + res.status)
 
@@ -372,13 +452,13 @@ class Provider {
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    private buildSmartSearchQueries(opts: AnimeSmartSearchOptions, absOffset: number = 0): SmartQuery[] {
+    private buildSmartSearchQueries(opts: AnimeSmartSearchOptions, absOffset: number = 0): { queries: SmartQuery[], absQuery: SmartQuery | null } {
         const { media, query: userQuery, batch, episodeNumber, resolution } = opts
 
         // user-provided query takes priority, single query
         if (userQuery) {
             const q = resolution ? userQuery + " " + resolution : userQuery
-            return [{ query: q, sortBy: "seeders" }]
+            return { queries: [{ query: q, sortBy: "seeders" }], absQuery: null }
         }
 
         const allTitles = [
@@ -387,7 +467,7 @@ class Provider {
             ...(media.synonyms || []),
         ].filter(Boolean)
 
-        if (allTitles.length === 0) return []
+        if (allTitles.length === 0) return { queries: [], absQuery: null }
 
         const processed = $scannerUtils.buildSmartSearchTitles(allTitles)
         const titles = processed.titles || []
@@ -396,7 +476,7 @@ class Provider {
         const season = processed.season > 0 && processed.season <= 12 ? processed.season : 0
         const part = processed.part > 0 && processed.part <= 4 ? processed.part : 0
 
-        if (titles.length === 0) return []
+        if (titles.length === 0) return { queries: [], absQuery: null }
 
         // shorter titles are less restrictive -> higher priority
         const sorted = [...titles].sort((a, b) => a.length - b.length)
@@ -405,12 +485,14 @@ class Provider {
         const canBatch = media.status === "FINISHED" && (media.episodeCount || 0) > 0
 
         let queries: SmartQuery[]
+        let absQuery: SmartQuery | null = null
         if (batch && canBatch && !isMovie) {
             queries = this.buildBatchQueries(sorted, season, part, media, resolution)
         } else if (isMovie) {
             queries = this.buildMovieQueries(sorted, resolution)
         } else {
             queries = this.buildEpisodeQueries(sorted, season, part, episodeNumber, media, resolution, absOffset)
+            absQuery = queries.length > 0 && absOffset > 0 ? queries[queries.length - 1] : null
         }
 
         // dedupe and cap
@@ -425,7 +507,13 @@ class Provider {
             if (unique.length >= 6) break
         }
 
-        return unique
+        // the abs query is last in the array; make sure the cap didn't drop it
+        if (absQuery && !seen.has(absQuery.query + "|" + absQuery.sortBy) && unique.length >= 6) {
+            unique.pop()
+            unique.push(absQuery)
+        }
+
+        return { queries: unique, absQuery: absQuery }
     }
 
     // 1. Exact-phrase title group + episode (catches every language variant)
@@ -637,7 +725,9 @@ class Provider {
 
     // mark the highest-quality release per episode (and per batch) as best.
     // scoring: preferredResolution (if set) dominates, then dual-audio (if
-    // preferred, worth ~2 resolution tiers), then resolution, then HEVC/x265
+    // preferred, worth ~2 resolution tiers), then preferredGroups, then
+    // resolution, then HEVC/x265. for batches, a release group's COMPLETE pack
+    // ("01-12") outranks its own partial splits ("01-06" + "07-12").
     private markBestReleases(torrents: Torrent[]): void {
         const cfg = this.getConfig()
         const targetRes = parseInt(cfg.preferredResolution, 10) || 0
@@ -654,18 +744,41 @@ class Provider {
             let s = r
             if (targetRes > 0 && r === targetRes) s += 1500
             if (cfg.preferDualAudio && this.isDualAudio(t.name)) s += 500
+            if (cfg.preferredGroups.some(g => t.name.toLowerCase().includes(g))) s += 300
             if (this.isHevc(t.name)) s += 10
             return s
         }
 
         for (const [, group] of groups) {
             let bestScore = -1
-            for (const t of group) {
-                const s = score(t)
-                if (s > bestScore) bestScore = s
+            const scored: { t: Torrent, s: number }[] = []
+
+            if (group[0].isBatch && group.length > 1) {
+                // per release group, find the largest pack range; only members
+                // holding the complete pack qualify for the pack bonus
+                const maxPack = new Map<string, number>()
+                for (const t of group) {
+                    const gk = this.torrentGroupKey(t)
+                    const size = this.packRangeSize(t.name)
+                    if (!maxPack.has(gk) || size > maxPack.get(gk)!) maxPack.set(gk, size)
+                }
+                for (const t of group) {
+                    const gk = this.torrentGroupKey(t)
+                    let s = score(t)
+                    if ((maxPack.get(gk) || 0) > 0 && this.packRangeSize(t.name) === maxPack.get(gk)) s += 2000
+                    scored.push({ t, s })
+                    if (s > bestScore) bestScore = s
+                }
+            } else {
+                for (const t of group) {
+                    const s = score(t)
+                    scored.push({ t, s })
+                    if (s > bestScore) bestScore = s
+                }
             }
-            for (const t of group) {
-                t.isBestRelease = bestScore > 0 && score(t) === bestScore
+
+            for (const { t, s } of scored) {
+                t.isBestRelease = bestScore > 0 && s === bestScore
             }
         }
     }
@@ -676,6 +789,29 @@ class Provider {
 
     private isHevc(name: string): boolean {
         return /\b(hevc|x265|10bit)\b/i.test(name)
+    }
+
+    private torrentGroupKey(t: Torrent): string {
+        if (t.metadata && t.metadata.release_group) return t.metadata.release_group.toLowerCase()
+        const m = t.name.match(/^\[([^\]]+)\]/)
+        return m ? m[1].toLowerCase() : "?"
+    }
+
+    // how many episodes a batch pack covers, from its range markers.
+    // "01-12" -> 12, "E01-E12" -> 12, "S1-S3" -> 3, "Complete Series" -> 999
+    private packRangeSize(name: string): number {
+        let m = name.match(/\bE?0*(\d{1,3})\s*[-~]\s*E?0*(\d{1,3})\b/i)
+        if (m) {
+            const s = parseInt(m[1], 10), e = parseInt(m[2], 10)
+            if (e > s && e <= 300) return e - s + 1
+        }
+        m = name.match(/\bS0*(\d{1,3})\s*[-~]\s*S?0*(\d{1,3})\b/i)
+        if (m) {
+            const s = parseInt(m[1], 10), e = parseInt(m[2], 10)
+            if (e > s) return e - s + 1
+        }
+        if (/\bcomplete\s+(?:series|collection)\b/i.test(name)) return 999
+        return 0
     }
 
     private sortTorrents(torrents: Torrent[], freshness: boolean = false): Torrent[] {

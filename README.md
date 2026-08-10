@@ -59,12 +59,14 @@ What's better than the stock provider:
 - **Accurate season/episode handling** — explicit-marker extraction that never misfires on numeric titles (`86`, `91 Days`), season/part verification, multi-season packs, absolute episode numbering via `absoluteSeasonOffset`
 - **AniList-derived episode offsets (v2.1+)** — later seasons get their absolute offset computed live from AniList, so SubsPlease-style continuing numbering (`Jujutsu Kaisen - 29` = S2E5) now matches. v2.3 extends this to **markerless sequels** (`Kaguya-sama: Love Is War? Ultra Romantic`) via AniList's relation graph. Cached 24h.
 - **Quality preferences (v2.3)** — `preferredResolution` (e.g. `1080`) and `preferDualAudio` config fields steer which release `bestReleases` picks: preferred resolution dominates, then dual-audio (~2 resolution tiers), then raw resolution, then HEVC
+- **Preferred groups (v2.4)** — `preferredGroups` config (e.g. `SubsPlease,Erai-raws`) boosts named groups in best-releases ties
+- **Batch complete-pack preference (v2.4)** — when a release group posts both `01-12` and split `01-06`/`07-12` packs, the complete pack wins in best-releases mode
 - **Freshness ordering (v2.3)** — for *airing* shows, the newest release of the episode sorts first (no more stale high-seed retimes on top); finished shows stay seeders-first
-- **Mirror failover (v2.1)** — `apiUrl` accepts a comma-separated list (`https://nyaa.si,https://nyaa.iss.one`); dead mirrors are rotated automatically and the working one is remembered
-- **8 public trackers** — on every magnet, better swarm survival
+- **Mirror failover (v2.1)** — `apiUrl` accepts a comma-separated list (`https://nyaa.si,https://nyaa.iss.one`); dead mirrors sink in the rotation until they recover, and the working one is remembered
+- **14 public trackers (v2.4)** — on every magnet, better swarm survival
 - **Query precedence fix (v2.1)** — episode/batch terms are ANDed onto *every* title variant, not just the last one
 - **Multi-language queries** — English, Romaji and Japanese synonyms are all queried and matched
-- **Performance** — parallel query fan-out, 3-min TTL cache, dedupe by info hash, results capped & sorted by seeders
+- **Performance (v2.4)** — AniList offset lookup starts in parallel with the RSS fan-out (no serialized AniList round-trip on cold searches), per-request timeouts (RSS 10s / AniList 8s vs the runtime's 35s default), and an op-level result cache so the UI's debounced repeat searches resolve in <50ms
 
 > Tip: if you also have the built-in *Nyaa* provider installed, disable it in Settings → Extensions so `Nyaa+` is the default.
 
