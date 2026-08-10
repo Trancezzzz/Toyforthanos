@@ -20,12 +20,18 @@
 //    continuing numbering ("Jujutsu Kaisen - 29" = S2E5). Cached 24h.
 //  - Mirror failover: apiUrl accepts a comma-separated list; failed mirrors
 //    are rotated and remembered.
+//  - Quality preferences (preferredResolution, preferDualAudio) steer the
+//    bestReleases picks instead of raw resolution alone.
+//  - Freshness-aware ordering for RELEASING media — the newest release of the
+//    episode wins, not the oldest high-seed torrent.
 
 interface ProviderConfig {
     baseUrls: string[]
     category: string
     filter: string
     maxResults: number
+    preferredResolution: string
+    preferDualAudio: boolean
 }
 
 interface RawTorrent {
@@ -52,6 +58,8 @@ const DEFAULT_API_URL = "https://nyaa.si"
 const DEFAULT_CATEGORY = "1_2"
 const DEFAULT_FILTER = "0"
 const DEFAULT_MAX_RESULTS = 60
+const DEFAULT_PREFERRED_RESOLUTION = ""
+const DEFAULT_PREFER_DUAL_AUDIO = "false"
 
 const CACHE_TTL_MS = 3 * 60 * 1000
 const CACHE_MAX_ENTRIES = 24
@@ -64,6 +72,10 @@ const TRACKERS = [
     "udp://open.stealth.si:80/announce",
     "udp://tracker.torrent.eu.org:451/announce",
     "udp://exodus.desync.com:6969/announce",
+    "udp://tracker.openbittorrent.com:6969/announce",
+    "udp://tracker.tiny-vps.com:6969/announce",
+    "udp://tracker.moeking.me:6969/announce",
+    "udp://tracker.pomf.se:80/announce",
 ]
 
 //@ts-ignore
@@ -104,15 +116,14 @@ class Provider {
 
     async smartSearch(options: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
         try {
-            // derive an absolute episode offset from AniList when this is a
-            // later season without one (SubsPlease-style continuing numbering).
-            // skipped for season 1 / part 1 media — they have no offset by
-            // definition, so we save the round-trip.
+            // derive an absolute episode offset from AniList whenever the media
+            // doesn't already carry one. catches BOTH marker-qualified sequels
+            // ("Jujutsu Kaisen 2nd Season") and markerless ones ("Kaguya-sama:
+            // Love Is War? Ultra Romantic") — AniList's relation graph is the
+            // source of truth for "is this season 2+". first entry / movie
+            // searches return offset 0 and skip the extra query.
             let absOffset = 0
-            const expectedSeason = this.getExpectedSeason(options.media)
-            const expectedPart = this.getExpectedPart(options.media)
             if (options.episodeNumber && options.episodeNumber > 0
-                && (expectedSeason > 1 || expectedPart > 1)
                 && !((options.media.absoluteSeasonOffset || 0) > 0)) {
                 absOffset = await this.getAnilistSeasonOffset(options.media)
             }
@@ -151,7 +162,10 @@ class Provider {
                 torrents = torrents.filter(t => t.isBestRelease)
             }
 
-            torrents.sort(this.compareTorrents)
+            // airing shows: newest release of the episode first (groups ship
+            // retimes/v2s); finished shows: seeders first as usual
+            const releasing = options.media.status === "RELEASING" && !options.batch && (options.episodeNumber || 0) > 0
+            this.sortTorrents(torrents, releasing)
 
             console.log("nyaa-plus: " + torrents.length + " torrents after filtering")
             return torrents
@@ -227,11 +241,19 @@ class Provider {
         if (isNaN(maxResults) || maxResults <= 0) maxResults = DEFAULT_MAX_RESULTS
         if (maxResults > 150) maxResults = 150
 
+        let preferredResolution = "{{preferredResolution}}"
+        if (!preferredResolution || preferredResolution.startsWith("{{")) preferredResolution = DEFAULT_PREFERRED_RESOLUTION
+
+        let preferDualAudio = "{{preferDualAudio}}"
+        if (!preferDualAudio || preferDualAudio.startsWith("{{")) preferDualAudio = DEFAULT_PREFER_DUAL_AUDIO
+
         return {
             baseUrls: baseUrls,
             category: category,
             filter: filter,
             maxResults: maxResults,
+            preferredResolution: preferredResolution.trim(),
+            preferDualAudio: preferDualAudio.toLowerCase() === "true",
         }
     }
 
@@ -613,8 +635,12 @@ class Provider {
         return true
     }
 
-    // mark the highest-resolution release per episode (and per batch) as best
+    // mark the highest-quality release per episode (and per batch) as best.
+    // scoring: preferredResolution (if set) dominates, then dual-audio (if
+    // preferred, worth ~2 resolution tiers), then resolution, then HEVC/x265
     private markBestReleases(torrents: Torrent[]): void {
+        const cfg = this.getConfig()
+        const targetRes = parseInt(cfg.preferredResolution, 10) || 0
         const groups = new Map<string, Torrent[]>()
 
         for (const t of torrents) {
@@ -623,16 +649,44 @@ class Provider {
             groups.get(key)!.push(t)
         }
 
+        const score = (t: Torrent): number => {
+            const r = parseInt(t.resolution || "", 10) || 0
+            let s = r
+            if (targetRes > 0 && r === targetRes) s += 1500
+            if (cfg.preferDualAudio && this.isDualAudio(t.name)) s += 500
+            if (this.isHevc(t.name)) s += 10
+            return s
+        }
+
         for (const [, group] of groups) {
-            let maxRes = 0
+            let bestScore = -1
             for (const t of group) {
-                const r = parseInt(t.resolution || "", 10) || 0
-                if (r > maxRes) maxRes = r
+                const s = score(t)
+                if (s > bestScore) bestScore = s
             }
             for (const t of group) {
-                t.isBestRelease = maxRes > 0 && (parseInt(t.resolution || "", 10) || 0) === maxRes
+                t.isBestRelease = bestScore > 0 && score(t) === bestScore
             }
         }
+    }
+
+    private isDualAudio(name: string): boolean {
+        return /dual[- ]?audio/i.test(name)
+    }
+
+    private isHevc(name: string): boolean {
+        return /\b(hevc|x265|10bit)\b/i.test(name)
+    }
+
+    private sortTorrents(torrents: Torrent[], freshness: boolean = false): Torrent[] {
+        if (!freshness) return torrents.sort(this.compareTorrents)
+        return torrents.sort((a, b) => {
+            const d1 = a.date ? new Date(a.date).getTime() : 0
+            const d2 = b.date ? new Date(b.date).getTime() : 0
+            if (d1 !== d2) return d2 - d1
+            if (a.seeders !== b.seeders) return b.seeders - a.seeders
+            return b.size - a.size
+        })
     }
 
     private compareTorrents(a: Torrent, b: Torrent): number {

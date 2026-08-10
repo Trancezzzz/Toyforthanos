@@ -21,6 +21,11 @@ const providerModule = compileProvider(providerSrc)
 // variant with a dead first mirror + live fallback, to exercise failover
 const mirrorSrc = providerSrc.split('"{{apiUrl}}"').join('"http://127.0.0.1:9,https://nyaa.si"')
 const mirrorModule = compileProvider(mirrorSrc)
+// variants for the quality-preference config
+const dualAudioSrc = providerSrc.split('"{{preferDualAudio}}"').join('"true"')
+const dualAudioModule = compileProvider(dualAudioSrc)
+const resAndDualSrc = dualAudioSrc.split('"{{preferredResolution}}"').join('"1080"')
+const resAndDualModule = compileProvider(resAndDualSrc)
 
 let pass = 0
 let fail = 0
@@ -329,6 +334,89 @@ async function main() {
     })
 
     // ---------------------------------------------------------------
+    await scenario("anilist offset — markerless sequel (Kaguya S3 'Ultra Romantic') derives offset 24", async () => {
+        const kaguya = media({
+            idMal: 48561, // MAL id: Kaguya-sama: Love Is War? - Ultra Romantic
+            romajiTitle: "Kaguya-sama: Love Is War? - Ultra Romantic",
+            englishTitle: "Kaguya-sama: Love Is War? - Ultra Romantic",
+            synonyms: ["かぐや様は告らせたい ウルトラロマンティック"],
+            episodeCount: 13,
+            status: "FINISHED",
+            startDate: { year: 2022, month: 4, day: 8 },
+        })
+        ok(provider.getExpectedSeason(kaguya) === 0, "no season marker in any title (old gate would have skipped this)")
+        const offset = await provider.getAnilistSeasonOffset(kaguya)
+        ok(offset === 24, "offset 24 (S1 12 eps + S2 12 eps)", offset)
+
+        const raw = {
+            name: "[SubsPlease] Kaguya-sama: Love Is War? - 31 (1080p) [ABCDEF12]",
+            link: "https://nyaa.si/view/1", downloadUrl: "https://nyaa.si/download/1.torrent",
+            date: "Sun, 24 Apr 2022 14:00:00 +0000", seeders: "900", leechers: "10",
+            downloads: "5000", infoHash: "h".repeat(40), size: "1.1 GiB",
+            metadata: $habari.parse("[SubsPlease] Kaguya-sama: Love Is War? - 31 (1080p) [ABCDEF12]"),
+        }
+        const abs31 = provider.toAnimeTorrent(raw)
+        ok(abs31.episodeNumber === 31, "absolute episode 31 parsed (24 + S3E7)")
+        const out = provider.filterSmartResults([abs31], {
+            media: kaguya, query: "", batch: false, episodeNumber: 7, resolution: "",
+            anidbAID: 0, anidbEID: 0, bestReleases: false,
+        }, offset)
+        ok(out.length === 1, "markerless-sequel absolute episode accepted", out.map(t => t.name))
+    })
+
+    // ---------------------------------------------------------------
+    await scenario("quality prefs — preferredResolution + preferDualAudio steer bestReleases", async () => {
+        const mk = (name, seeders) => new providerModule.Provider().toAnimeTorrent({
+            name, link: "", downloadUrl: "", date: "", seeders: String(seeders), leechers: "0", downloads: "0",
+            infoHash: "i".repeat(40), size: "1.0 GiB",
+            metadata: { title: name, formatted_title: name },
+        })
+        const res1080 = mk("[SubsPlease] Frieren - 12 (1080p) [ABCDEF12]", 900)
+        const res2160 = mk("[Judas] Frieren - 12 (2160p) [ABCDEF13]", 500)
+        const dual720 = mk("[Erai-raws] Frieren - 12 (720p) [Dual Audio] [HEVC] [ABCDEF14]", 300)
+        ok(provider.isDualAudio("[X] Foo - 01 [Dual Audio]") === true, "dual-audio detected")
+        ok(provider.isDualAudio("[X] Foo - 01 [DualAudio]") === true, "dual-audio (no space) detected")
+        ok(provider.isDualAudio("[X] Foo - 01 (1080p)") === false, "not dual-audio")
+        ok(provider.isHevc("[X] Foo [HEVC]") === true, "hevc detected")
+
+        // preferDualAudio only: dual-audio 720 outranks plain 1080
+        const pp = new dualAudioModule.Provider()
+        const a = pp.toAnimeTorrent({ name: "[SubsPlease] Frieren - 12 (1080p) [A1]", link: "", downloadUrl: "", date: "", seeders: "900", leechers: "0", downloads: "0", infoHash: "i1".repeat(20), size: "1.0 GiB", metadata: { title: "Frieren", formatted_title: "Frieren" } })
+        const b = pp.toAnimeTorrent({ name: "[Erai-raws] Frieren - 12 (720p) [Dual Audio] [HEVC] [B2]", link: "", downloadUrl: "", date: "", seeders: "300", leechers: "0", downloads: "0", infoHash: "i2".repeat(20), size: "1.0 GiB", metadata: { title: "Frieren", formatted_title: "Frieren" } })
+        pp.markBestReleases([a, b])
+        ok(b.isBestRelease === true && a.isBestRelease === false, "dual-audio preferred over plain 1080", [a.isBestRelease, b.isBestRelease])
+
+        // preferredResolution 1080 + preferDualAudio: 1080 target dominates even 2160
+        const rp = new resAndDualModule.Provider()
+        const c1 = rp.toAnimeTorrent({ name: "[SubsPlease] Frieren - 12 (1080p) [C1]", link: "", downloadUrl: "", date: "", seeders: "900", leechers: "0", downloads: "0", infoHash: "i3".repeat(20), size: "1.0 GiB", metadata: { title: "Frieren", formatted_title: "Frieren" } })
+        const c2 = rp.toAnimeTorrent({ name: "[Judas] Frieren - 12 (2160p) [C2]", link: "", downloadUrl: "", date: "", seeders: "500", leechers: "0", downloads: "0", infoHash: "i4".repeat(20), size: "1.0 GiB", metadata: { title: "Frieren", formatted_title: "Frieren" } })
+        rp.markBestReleases([c1, c2])
+        ok(c1.isBestRelease === true && c2.isBestRelease === false, "1080 preferred over 2160 when configured", [c1.isBestRelease, c2.isBestRelease])
+
+        // default config: highest resolution wins as before
+        const dp = new providerModule.Provider()
+        const d1 = dp.toAnimeTorrent({ name: "[SubsPlease] Frieren - 12 (1080p) [D1]", link: "", downloadUrl: "", date: "", seeders: "900", leechers: "0", downloads: "0", infoHash: "i5".repeat(20), size: "1.0 GiB", metadata: { title: "Frieren", formatted_title: "Frieren" } })
+        const d2 = dp.toAnimeTorrent({ name: "[Judas] Frieren - 12 (2160p) [D2]", link: "", downloadUrl: "", date: "", seeders: "500", leechers: "0", downloads: "0", infoHash: "i6".repeat(20), size: "1.0 GiB", metadata: { title: "Frieren", formatted_title: "Frieren" } })
+        dp.markBestReleases([d1, d2])
+        ok(d2.isBestRelease === true && d1.isBestRelease === false, "default: highest resolution wins", [d1.isBestRelease, d2.isBestRelease])
+    })
+
+    // ---------------------------------------------------------------
+    await scenario("freshness — airing shows sort newest-first within an episode", async () => {
+        const mk = (name, date, seeders, hash) => provider.toAnimeTorrent({
+            name, link: "https://nyaa.si/view/1", downloadUrl: "", date, seeders: String(seeders), leechers: "0", downloads: "0",
+            infoHash: hash, size: "1.0 GiB",
+            metadata: { title: name, formatted_title: name },
+        })
+        const oldSeedy = mk("[SubsPlease] Frieren - 12 (1080p) [O]", "Sat, 02 Mar 2024 14:00:00 +0000", 3000, "j".repeat(40))
+        const newFresh = mk("[Yameii] Frieren - 12 (1080p) [N]", "Sat, 09 Mar 2024 14:00:00 +0000", 20, "k".repeat(40))
+        const fresh = provider.sortTorrents([oldSeedy, newFresh], true)
+        ok(fresh[0] === newFresh, "newest release first for airing media", fresh.map(t => t.name))
+        const seedy = provider.sortTorrents([oldSeedy, newFresh], false)
+        ok(seedy[0] === oldSeedy, "seeders first for finished media", seedy.map(t => t.name))
+    })
+
+    // ---------------------------------------------------------------
     await scenario("exact title group — episode suffix ANDed onto EVERY variant", async () => {
         const g = provider.buildExactTitleGroup(media({
             romajiTitle: "Jujutsu Kaisen 2nd Season",
@@ -399,6 +487,8 @@ async function main() {
         ok(ms < 500, "magnet built in <500ms (stock provider scrapes the page)", ms + "ms")
         ok(/^magnet:\?xt=urn:btih:/.test(magnet), "magnet format", magnet.slice(0, 60))
         ok(magnet.includes("&tr="), "has trackers")
+        const trCount = (magnet.match(/&tr=/g) || []).length
+        ok(trCount >= 8, "8 public trackers for swarm health", trCount)
         ok(magnet.includes("&dn="), "has display name")
     })
 
