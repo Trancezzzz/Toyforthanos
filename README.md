@@ -57,6 +57,9 @@ What's better than the stock provider:
 - **All smart-search options show in the UI** — batch, episode number, resolution, query *and* best releases (the stock one is missing `bestReleases`)
 - **Instant magnets** — built straight from the RSS info hash, no torrent-page scraping (stock fetches every page)
 - **Accurate season/episode handling** — explicit-marker extraction that never misfires on numeric titles (`86`, `91 Days`), season/part verification, multi-season packs, absolute episode numbering via `absoluteSeasonOffset`
+- **AniList-derived episode offsets (v2.1)** — later seasons get their absolute offset computed live from AniList, so SubsPlease-style continuing numbering (`Jujutsu Kaisen - 29` = S2E5) now matches. Cached 24h.
+- **Mirror failover (v2.1)** — `apiUrl` accepts a comma-separated list (`https://nyaa.si,https://nyaa.iss.one`); dead mirrors are rotated automatically and the working one is remembered
+- **Query precedence fix (v2.1)** — episode/batch terms are ANDed onto *every* title variant, not just the last one
 - **Multi-language queries** — English, Romaji and Japanese synonyms are all queried and matched
 - **Performance** — parallel query fan-out, 3-min TTL cache, dedupe by info hash, results capped & sorted by seeders
 

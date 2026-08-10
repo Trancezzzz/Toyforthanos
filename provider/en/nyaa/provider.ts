@@ -15,9 +15,14 @@
 //  - Multi-language queries: English, Romaji, Japanese synonyms all tried.
 //  - Per-query TTL cache, parallel query fan-out, dedupe by info hash,
 //    seeders/quality sorting, result caps.
+//  - Absolute episode offsets derived live from AniList (graphql.anilist.co
+//    is whitelisted in Seanime's fetch runtime) — cracks SubsPlease-style
+//    continuing numbering ("Jujutsu Kaisen - 29" = S2E5). Cached 24h.
+//  - Mirror failover: apiUrl accepts a comma-separated list; failed mirrors
+//    are rotated and remembered.
 
 interface ProviderConfig {
-    baseUrl: string
+    baseUrls: string[]
     category: string
     filter: string
     maxResults: number
@@ -51,6 +56,9 @@ const DEFAULT_MAX_RESULTS = 60
 const CACHE_TTL_MS = 3 * 60 * 1000
 const CACHE_MAX_ENTRIES = 24
 
+const ABS_OFFSET_TTL_MS = 24 * 60 * 60 * 1000
+const MAX_MIRROR_ATTEMPTS = 3
+
 const TRACKERS = [
     "udp://tracker.opentrackr.org:1337/announce",
     "udp://open.stealth.si:80/announce",
@@ -64,13 +72,14 @@ class Provider {
     supportsAdult = false
 
     private _cache = new Map<string, { time: number, torrents: RawTorrent[] }>()
+    private _absOffCache = new Map<number, { time: number, offset: number }>()
+    private _mirrorIdx = 0
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     async getLatest(): Promise<AnimeTorrent[]> {
         try {
-            const url = this.buildURL("", "id")
-            const raw = await this.fetchRSS(url)
+            const raw = await this.fetchRSS("", "id")
             const torrents = raw.slice(0, this.getConfig().maxResults).map(t => this.toAnimeTorrent(t))
             console.log("nyaa-plus: " + torrents.length + " latest torrents")
             return torrents
@@ -82,8 +91,7 @@ class Provider {
 
     async search(options: AnimeSearchOptions): Promise<AnimeTorrent[]> {
         try {
-            const url = this.buildURL(options.query, "seeders")
-            const raw = await this.fetchRSS(url)
+            const raw = await this.fetchRSS(options.query, "seeders")
             const torrents = raw.slice(0, this.getConfig().maxResults).map(t => this.toAnimeTorrent(t))
             torrents.sort(this.compareTorrents)
             console.log("nyaa-plus: " + torrents.length + " results for '" + options.query + "'")
@@ -96,7 +104,20 @@ class Provider {
 
     async smartSearch(options: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
         try {
-            const queries = this.buildSmartSearchQueries(options)
+            // derive an absolute episode offset from AniList when this is a
+            // later season without one (SubsPlease-style continuing numbering).
+            // skipped for season 1 / part 1 media — they have no offset by
+            // definition, so we save the round-trip.
+            let absOffset = 0
+            const expectedSeason = this.getExpectedSeason(options.media)
+            const expectedPart = this.getExpectedPart(options.media)
+            if (options.episodeNumber && options.episodeNumber > 0
+                && (expectedSeason > 1 || expectedPart > 1)
+                && !((options.media.absoluteSeasonOffset || 0) > 0)) {
+                absOffset = await this.getAnilistSeasonOffset(options.media)
+            }
+
+            const queries = this.buildSmartSearchQueries(options, absOffset)
             if (!queries || queries.length === 0) {
                 console.warn("nyaa-plus: smart search: no queries generated")
                 return []
@@ -105,7 +126,7 @@ class Provider {
             // fan out all queries in parallel
             const results = await Promise.all(queries.map(async (q) => {
                 try {
-                    return await this.fetchRSS(this.buildURL(q.query, q.sortBy))
+                    return await this.fetchRSS(q.query, q.sortBy)
                 } catch (e) {
                     console.error("nyaa-plus: query failed (" + q.query + "): " + (e as Error).message)
                     return [] as RawTorrent[]
@@ -123,7 +144,7 @@ class Provider {
             let torrents = [...unique.values()].map(t => this.toAnimeTorrent(t))
             console.log("nyaa-plus: " + torrents.length + " unique before filtering")
 
-            torrents = this.filterSmartResults(torrents, options)
+            torrents = this.filterSmartResults(torrents, options, absOffset)
 
             if (options.bestReleases) {
                 this.markBestReleases(torrents)
@@ -187,8 +208,14 @@ class Provider {
     private getConfig(): ProviderConfig {
         let apiUrl = "{{apiUrl}}"
         if (!apiUrl || apiUrl.startsWith("{{")) apiUrl = DEFAULT_API_URL
-        apiUrl = apiUrl.trim()
-        if (!apiUrl.startsWith("http")) apiUrl = "https://" + apiUrl
+
+        // comma-separated mirror list: "https://nyaa.si,https://nyaa.iss.one"
+        const baseUrls = apiUrl
+            .split(",")
+            .map(u => u.trim().replace(/\/+$/, ""))
+            .filter(u => u.length > 0)
+            .map(u => u.startsWith("http") ? u : "https://" + u)
+        if (baseUrls.length === 0) baseUrls.push(DEFAULT_API_URL)
 
         let category = "{{category}}"
         if (!category || category.startsWith("{{")) category = DEFAULT_CATEGORY
@@ -201,7 +228,7 @@ class Provider {
         if (maxResults > 150) maxResults = 150
 
         return {
-            baseUrl: apiUrl.replace(/\/$/, ""),
+            baseUrls: baseUrls,
             category: category,
             filter: filter,
             maxResults: maxResults,
@@ -210,32 +237,119 @@ class Provider {
 
     private buildURL(query: string, sortBy: string = "seeders"): string {
         const cfg = this.getConfig()
+        const base = cfg.baseUrls[this._mirrorIdx % cfg.baseUrls.length]
         const qs = "page=rss&q=" + encodeURIComponent(query) + "&c=" + cfg.category + "&f=" + cfg.filter + "&s=" + sortBy + "&o=desc"
-        return cfg.baseUrl + "/?" + qs
+        return base + "/?" + qs
     }
 
-    private async fetchRSS(url: string): Promise<RawTorrent[]> {
+    private async fetchRSS(query: string, sortBy: string = "seeders"): Promise<RawTorrent[]> {
         // TTL cache — the UI re-triggers smart search with debounced values,
         // no point hammering nyaa for identical queries
+        const url = this.buildURL(query, sortBy)
         const hit = this._cache.get(url)
         if (hit && Date.now() - hit.time < CACHE_TTL_MS) return hit.torrents
 
-        const res = await fetch(url)
-        if (!res.ok) throw new Error("HTTP " + res.status)
-        const torrents = this.parseRSSFeed(res.text())
+        // mirror failover: try the current mirror, rotate on failure, retry.
+        // the working mirror is remembered for the next call.
+        const mirrors = this.getConfig().baseUrls
+        const attempts = Math.min(mirrors.length, MAX_MIRROR_ATTEMPTS)
+        let lastError: Error | null = null
 
-        this._cache.set(url, { time: Date.now(), torrents })
-        if (this._cache.size > CACHE_MAX_ENTRIES) {
-            const oldest = this._cache.keys().next().value
-            if (oldest) this._cache.delete(oldest)
+        for (let attempt = 0; attempt < attempts; attempt++) {
+            const attemptUrl = this.buildURL(query, sortBy)
+            try {
+                const res = await fetch(attemptUrl)
+                if (!res.ok) throw new Error("HTTP " + res.status)
+                const torrents = this.parseRSSFeed(res.text())
+
+                this._cache.set(attemptUrl, { time: Date.now(), torrents })
+                if (this._cache.size > CACHE_MAX_ENTRIES) {
+                    const oldest = this._cache.keys().next().value
+                    if (oldest) this._cache.delete(oldest)
+                }
+
+                return torrents
+            } catch (e) {
+                lastError = e as Error
+                console.error("nyaa-plus: mirror " + (this._mirrorIdx % mirrors.length) + " failed for '" + query + "': " + (e as Error).message)
+                this._mirrorIdx = (this._mirrorIdx + 1) % mirrors.length
+            }
         }
 
-        return torrents
+        throw lastError || new Error("all mirrors failed")
+    }
+
+    // ------------------------------------------------------------------
+    // Absolute episode offset via AniList.
+    //
+    // Some groups (SubsPlease, Erai-raws) number later seasons with
+    // continuing episode counts ("Jujutsu Kaisen - 29" is S2E5 because S1
+    // had 24 episodes). Seanime only supplies absoluteSeasonOffset when the
+    // media carries it, so we derive it ourselves: sum the episode counts of
+    // every anime-season relation (TV/TV_SHORT/ONA, PREQUEL/SEQUEL/PARENT)
+    // that finished airing before this media started. graphql.anilist.co is
+    // whitelisted in the runtime. Cached 24h per media id.
+    // ------------------------------------------------------------------
+    private async getAnilistSeasonOffset(media: Media): Promise<number> {
+        // idMal and AniList id are different ID spaces — filter by whichever exists
+        const hasMal = !!(media.idMal && media.idMal > 0)
+        const key = hasMal ? media.idMal : (media.id || 0)
+        if (!key) return 0
+
+        const cached = this._absOffCache.get(key)
+        if (cached && Date.now() - cached.time < ABS_OFFSET_TTL_MS) return cached.offset
+
+        let offset = 0
+        try {
+            const query = (hasMal ? "Media(idMal: $id)" : "Media(id: $id)")
+                + " { startDate { year month day } relations { edges { relationType node { type format episodes endDate { year month day } } } } }"
+            const res = await fetch("https://graphql.anilist.co", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify({ query: "query ($id: Int) { " + query + " }", variables: { id: key } }),
+            })
+            if (!res.ok) throw new Error("HTTP " + res.status)
+
+            const json = res.json()
+            const node = json && json.data ? json.data.Media : null
+            if (!node) throw new Error("media not found")
+
+            const mediaStart = this.dateToTs(node.startDate)
+
+            for (const edge of (node.relations && node.relations.edges) || []) {
+                const rel = edge && edge.node ? edge.node : null
+                if (!rel || rel.type !== "ANIME") continue
+                if (rel.format !== "TV" && rel.format !== "TV_SHORT" && rel.format !== "ONA") continue
+                if (edge.relationType !== "PREQUEL" && edge.relationType !== "SEQUEL" && edge.relationType !== "PARENT") continue
+
+                const eps = parseInt(rel.episodes, 10)
+                if (!eps || eps <= 0) continue
+
+                // only count seasons that fully finished before this one started
+                const relEnd = this.dateToTs(rel.endDate)
+                if (relEnd > 0 && mediaStart > 0 && relEnd > mediaStart) continue
+
+                offset += eps
+            }
+
+            console.log("nyaa-plus: anilist offset for " + key + " = " + offset)
+        } catch (e) {
+            console.error("nyaa-plus: anilist offset fetch failed: " + (e as Error).message)
+            offset = 0
+        }
+
+        this._absOffCache.set(key, { time: Date.now(), offset: offset })
+        return offset
+    }
+
+    private dateToTs(d: { year?: number, month?: number, day?: number } | null | undefined): number {
+        if (!d || !d.year) return 0
+        return new Date(d.year, (d.month || 1) - 1, d.day || 1).getTime()
     }
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    private buildSmartSearchQueries(opts: AnimeSmartSearchOptions): SmartQuery[] {
+    private buildSmartSearchQueries(opts: AnimeSmartSearchOptions, absOffset: number = 0): SmartQuery[] {
         const { media, query: userQuery, batch, episodeNumber, resolution } = opts
 
         // user-provided query takes priority, single query
@@ -273,7 +387,7 @@ class Provider {
         } else if (isMovie) {
             queries = this.buildMovieQueries(sorted, resolution)
         } else {
-            queries = this.buildEpisodeQueries(sorted, season, part, episodeNumber, media, resolution)
+            queries = this.buildEpisodeQueries(sorted, season, part, episodeNumber, media, resolution, absOffset)
         }
 
         // dedupe and cap
@@ -299,18 +413,19 @@ class Provider {
     // 6. Absolute episode number (if the media uses absolute numbering)
     private buildEpisodeQueries(
         sorted: string[], season: number, part: number,
-        episodeNumber: number, media: Media, resolution: string
+        episodeNumber: number, media: Media, resolution: string, absOffset: number = 0
     ): SmartQuery[] {
         const queries: SmartQuery[] = []
         const resStr = resolution ? " " + resolution : " (360|480|720|1080)"
         const epGroup = this.buildEpisodeGroup(episodeNumber, season)
         const primary = sorted[0]
         const secondary = sorted.length > 1 ? sorted[1] : ""
-        const hasAbsoluteOffset = (media.absoluteSeasonOffset || 0) > 0
+        const offset = (media.absoluteSeasonOffset || 0) || absOffset
+        const hasAbsoluteOffset = offset > 0
 
-        const exactGroup = this.buildExactTitleGroup(media)
+        const exactGroup = this.buildExactTitleGroup(media, epGroup + resStr)
         if (exactGroup) {
-            queries.push({ query: exactGroup + epGroup + resStr, sortBy: "seeders" })
+            queries.push({ query: exactGroup, sortBy: "seeders" })
         }
 
         queries.push({ query: primary + " " + epGroup + resStr, sortBy: "seeders" })
@@ -328,8 +443,13 @@ class Provider {
         }
 
         if (hasAbsoluteOffset && episodeNumber > 0) {
-            const absEp = episodeNumber + (media.absoluteSeasonOffset || 0)
-            queries.push({ query: primary + " " + this.buildEpisodeGroup(absEp, 0, true) + resStr, sortBy: "seeders" })
+            const absEp = episodeNumber + offset
+            // continuing-numbering groups name torrents after the franchise
+            // base title ("Jujutsu Kaisen - 29"), not the season-qualified one
+            const base = this.getBaseFranchiseTitles(media)[0] || $scannerUtils.buildSearchQuery(primary)
+            if (base) {
+                queries.push({ query: base + " " + this.buildEpisodeGroup(absEp, 0, true) + resStr, sortBy: "seeders" })
+            }
         }
 
         return queries
@@ -352,9 +472,9 @@ class Provider {
         const batchTerms = this.buildBatchTerms(media)
         const discTerms = " (BD|Blu-ray|BDRip|Remux|HEVC|x265|10bit|Dual-Audio|Dual Audio)"
 
-        const exactGroup = this.buildExactTitleGroup(media)
+        const exactGroup = this.buildExactTitleGroup(media, batchTerms + resStr)
         if (exactGroup) {
-            queries.push({ query: exactGroup + batchTerms + resStr, sortBy: "size" })
+            queries.push({ query: exactGroup, sortBy: "size" })
         }
 
         queries.push({ query: primary + batchTerms + resStr, sortBy: "size" })
@@ -400,13 +520,14 @@ class Provider {
     //  - title must match one of the media titles (weighted token match)
     //  - torrent must not predate the anime's airing window
     //  - season/part verification only when explicitly marked
-    private filterSmartResults(torrents: Torrent[], opts: AnimeSmartSearchOptions): Torrent[] {
+    private filterSmartResults(torrents: Torrent[], opts: AnimeSmartSearchOptions, absOffset: number = 0): Torrent[] {
         const { media, batch, episodeNumber, query: userQuery } = opts
         const isMovie = media.format === "MOVIE" && (media.episodeCount || 0) === 1
         const expectedSeason = this.getExpectedSeason(media)
         const expectedPart = this.getExpectedPart(media)
-        const hasAbsoluteOffset = (media.absoluteSeasonOffset || 0) > 0
-        const absEp = hasAbsoluteOffset && episodeNumber > 0 ? episodeNumber + (media.absoluteSeasonOffset || 0) : -1
+        const offset = (media.absoluteSeasonOffset || 0) || absOffset
+        const hasAbsoluteOffset = offset > 0
+        const absEp = hasAbsoluteOffset && episodeNumber > 0 ? episodeNumber + offset : -1
         const minDate = this.getMediaMinDate(media)
         // users who typed a custom query know what they want — relax title matching
         const titleThreshold = userQuery ? 0.4 : (batch ? 0.55 : 0.65)
@@ -799,7 +920,10 @@ class Provider {
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    private buildExactTitleGroup(media: Media): string {
+    // exact-phrase OR group of the media's titles. `suffix` (episode/res/batch
+    // terms) is ANDed onto EVERY variant — nyaa's "|" binds looser than
+    // adjacency, so appending after the group would only qualify the last one
+    private buildExactTitleGroup(media: Media, suffix: string = ""): string {
         let titles = [
             media.romajiTitle || "",
             media.englishTitle || "",
@@ -823,7 +947,7 @@ class Provider {
         titles = [...new Set(titles)].slice(0, 3)
         if (titles.length === 0) return ""
 
-        return "(" + titles.map(t => '"' + t + '"').join("|") + ")"
+        return "(" + titles.map(t => '"' + t + '"' + suffix).join("|") + ")"
     }
 
     // episode number OR group: "05", "E05", "EP05", "EP5", "S02E05"

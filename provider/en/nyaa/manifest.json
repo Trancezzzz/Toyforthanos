@@ -1,9 +1,9 @@
 {
   "id": "nyaa-plus",
   "name": "Nyaa+",
-  "description": "Improved Nyaa provider — multi-language smart search (English, Romaji, Japanese), accurate season/episode handling, all smart-search options (batch, episode, resolution, query, best releases), instant magnets from RSS info hashes. Drop-in upgrade for the built-in Nyaa provider.",
+  "description": "Improved Nyaa provider — multi-language smart search (English, Romaji, Japanese), accurate season/episode handling, all smart-search options (batch, episode, resolution, query, best releases), instant magnets from RSS info hashes, mirror failover, live AniList episode-offset derivation (cracks SubsPlease-style continuing numbering). Drop-in upgrade for the built-in Nyaa provider.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/nyaa/manifest.json",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "semverConstraint": ">= 3.5.1",
   "author": "Trancezzz",
   "type": "anime-torrent-provider",
@@ -16,7 +16,7 @@
     "fields": [
       {
         "name": "apiUrl",
-        "label": "API URL",
+        "label": "API URL (comma-separated mirrors: nyaa.si,nyaa.iss.one)",
         "type": "text",
         "default": "https://nyaa.si"
       },
