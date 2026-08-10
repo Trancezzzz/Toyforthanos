@@ -557,17 +557,34 @@ async function main() {
     })
 
     // ---------------------------------------------------------------
-    await scenario("exact title group — episode suffix ANDed onto EVERY variant", async () => {
-        const g = provider.buildExactTitleGroup(media({
+    await scenario("title OR group — suffix ANDed after the group, never inside (live-verified)", async () => {
+        const g = provider.buildTitleOrGroup(media({
             romajiTitle: "Jujutsu Kaisen 2nd Season",
             englishTitle: "Jujutsu Kaisen Season 2",
-            synonyms: ["Jujutsu Kaisen 2"],
-        }), "(05|E05|S02E05)(360|720|1080)")
+            synonyms: ["呪術廻戦 第2期", "Jujutsu Kaisen 2"],
+        }))
         const variants = g.match(/"([^"]+)"/g) || []
-        ok(variants.length >= 2, "group has multiple variants", variants)
-        const allSuffixed = variants.every(v => g.includes(v + "(05|E05|S02E05)(360|720|1080)"))
-        ok(allSuffixed, "every variant carries the episode+res suffix", g)
-        ok(/^\(".+"\(05\|E05\|S02E05\)\(360\|720\|1080\)(\|".+"\(05\|E05\|S02E05\)\(360\|720\|1080\))+\)$/.test(g), "suffix inside each paren pair", g)
+        ok(variants.length >= 3, "group has all variants (no 3-title cap)", variants.length)
+        ok(g.includes("呪術廻戦"), "CJK variants stay in the group (harmless inside an OR on nyaa)")
+        // the proven-safe shape: (all titles)(suffix...) — live nyaa returns 0
+        // rows when 3+ variants carry their own suffix group inside the OR
+        ok(/^\(("[^"]+"\|)*"[^"]+"\)$/.test(g), "flat phrase-OR group, no suffix inside", g)
+    })
+
+    // ---------------------------------------------------------------
+    await scenario("title OR group — live nyaa regression: 3+ suffixed variants must NOT zero the query", async () => {
+        // Jujutsu Kaisen 2nd Season, ep 5 — 4 variants (incl. CJK), the exact
+        // shape that used to return 0 rows on real nyaa
+        const q = provider.buildTitleOrGroup(media({
+            romajiTitle: "Jujutsu Kaisen 2nd Season",
+            englishTitle: "Jujutsu Kaisen Season 2",
+            synonyms: ["呪術廻戦 第2期", "Jujutsu Kaisen 2"],
+        })) + "(05|E05|EP05|EP5|S02E05)(360|480|720|1080)"
+        const cfg = provider.getConfig()
+        const url = cfg.baseUrls[0] + "/?page=rss&q=" + encodeURIComponent(q) + "&c=" + cfg.category + "&f=0&s=seeders&o=desc&limit=25"
+        const res = await fetch(url)
+        const items = (res.text().match(/<item>/g) || []).length
+        ok(items > 0, "live nyaa returns results for group+suffix-after shape", items + " items")
     })
 
     // ---------------------------------------------------------------

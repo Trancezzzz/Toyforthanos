@@ -598,7 +598,7 @@ class Provider {
         if (batch && canBatch && !isMovie) {
             queries = this.buildBatchQueries(sorted, season, part, media, resolution)
         } else if (isMovie) {
-            queries = this.buildMovieQueries(sorted, resolution)
+            queries = this.buildMovieQueries(sorted, resolution, media)
         } else {
             queries = this.buildEpisodeQueries(sorted, season, part, episodeNumber, media, resolution, absOffset)
             absQuery = queries.length > 0 && absOffset > 0 ? queries[queries.length - 1] : null
@@ -648,9 +648,11 @@ class Provider {
         // episode of the show; episode-specific fan-out is skipped on pool hits.
         queries.push({ query: primary + resStr, sortBy: "seeders", pool: true })
 
-        const exactGroup = this.buildExactTitleGroup(media, epGroup + resStr)
-        if (exactGroup) {
-            queries.push({ query: exactGroup, sortBy: "seeders" })
+        // all-title OR group with episode + resolution ANDed after — catches
+        // every language/variant release in one query (see buildTitleOrGroup)
+        const titleGroup = this.buildTitleOrGroup(media)
+        if (titleGroup) {
+            queries.push({ query: titleGroup + epGroup + resStr.trim(), sortBy: "seeders" })
         }
 
         queries.push({ query: primary + " " + epGroup + resStr, sortBy: "seeders", supplement: true })
@@ -701,9 +703,10 @@ class Provider {
         // the biggest packs surface; cached per media, reused across searches)
         queries.push({ query: primary + resStr, sortBy: "size", pool: true })
 
-        const exactGroup = this.buildExactTitleGroup(media, batchTerms + resStr)
-        if (exactGroup) {
-            queries.push({ query: exactGroup, sortBy: "size" })
+        // all-title OR group with batch + resolution ANDed after
+        const titleGroup = this.buildTitleOrGroup(media)
+        if (titleGroup) {
+            queries.push({ query: titleGroup + batchTerms + resStr.trim(), sortBy: "size" })
         }
 
         queries.push({ query: primary + batchTerms + resStr, sortBy: "size", supplement: true })
@@ -724,13 +727,17 @@ class Provider {
 
         return queries
     }
-    private buildMovieQueries(sorted: string[], resolution: string): SmartQuery[] {
+    private buildMovieQueries(sorted: string[], resolution: string, media: Media): SmartQuery[] {
         const queries: SmartQuery[] = []
         const resStr = resolution ? " " + resolution : " (360|480|720|1080)"
         const primary = sorted[0]
         const secondary = sorted.length > 1 ? sorted[1] : ""
 
         queries.push({ query: primary + resStr, sortBy: "seeders" })
+        const titleGroup = this.buildTitleOrGroup(media)
+        if (titleGroup) {
+            queries.push({ query: titleGroup + resStr.trim(), sortBy: "seeders" })
+        }
         if (secondary) {
             queries.push({ query: secondary + resStr, sortBy: "seeders" })
         }
@@ -1231,10 +1238,11 @@ class Provider {
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    // exact-phrase OR group of the media's titles. `suffix` (episode/res/batch
-    // terms) is ANDed onto EVERY variant — nyaa's "|" binds looser than
-    // adjacency, so appending after the group would only qualify the last one
-    private buildExactTitleGroup(media: Media, suffix: string = ""): string {
+    // all titles in ONE phrase-OR group; the caller ANDs the episode/batch
+    // and resolution groups AFTER it (no suffix inside the OR). Verified on
+    // live nyaa: a suffix group inside the OR returns 0 rows once 3+ variants
+    // carry it, while this form scales to any number of titles.
+    private buildTitleOrGroup(media: Media): string {
         let titles = [
             media.romajiTitle || "",
             media.englishTitle || "",
@@ -1255,16 +1263,17 @@ class Provider {
             return clean.trim()
         }).filter(Boolean)
 
-        titles = [...new Set(titles)].slice(0, 3)
+        titles = [...new Set(titles)]
         if (titles.length === 0) return ""
 
-        return "(" + titles.map(t => '"' + t + '"' + suffix).join("|") + ")"
+        return "(" + titles.map(t => '"' + t + '"').join("|") + ")"
     }
 
-    // episode number OR group: "05", "E05", "EP05", "EP5", "S02E05"
+    // episode number OR group: "05", "E05", "EP05", "EP5", "05v" (v2 re-releases),
+    // "E05v", "S02E05"
     private buildEpisodeGroup(ep: number, season?: number, isAbsolute: boolean = false): string {
         const padded = this.zeropad(ep)
-        let terms = [padded, "E" + padded, "EP" + padded, "EP" + ep]
+        let terms = [padded, "E" + padded, "EP" + padded, "EP" + ep, padded + "v", "E" + padded + "v"]
 
         if (!isAbsolute) {
             const actualSeason = season && season > 0 ? season : 1
