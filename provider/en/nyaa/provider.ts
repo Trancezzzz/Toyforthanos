@@ -57,7 +57,7 @@ const CACHE_TTL_MS = 3 * 60 * 1000
 const CACHE_MAX_ENTRIES = 24
 
 const ABS_OFFSET_TTL_MS = 24 * 60 * 60 * 1000
-const MAX_MIRROR_ATTEMPTS = 3
+const MAX_MIRROR_ATTEMPTS = 5
 
 const TRACKERS = [
     "udp://tracker.opentrackr.org:1337/announce",
@@ -268,6 +268,7 @@ class Provider {
                     if (oldest) this._cache.delete(oldest)
                 }
 
+                if (attempt > 0) console.log("nyaa-plus: using mirror " + (this._mirrorIdx % mirrors.length) + " (" + this.getConfig().baseUrls[this._mirrorIdx % mirrors.length] + ")")
                 return torrents
             } catch (e) {
                 lastError = e as Error

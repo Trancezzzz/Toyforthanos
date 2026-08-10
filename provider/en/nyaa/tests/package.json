@@ -1,0 +1,8 @@
+{
+  "name": "nyaa-plus-tests",
+  "private": true,
+  "description": "goja-compatible test harness for the Nyaa+ provider. Run: npm test",
+  "scripts": {
+    "test": "npx -p typescript tsc -p tsconfig.json && node run-tests.js"
+  }
+}

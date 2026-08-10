@@ -65,6 +65,12 @@ What's better than the stock provider:
 
 > Tip: if you also have the built-in *Nyaa* provider installed, disable it in Settings → Extensions so `Nyaa+` is the default.
 
+**Testing:** a goja-compatible harness lives in [`provider/en/nyaa/tests/`](provider/en/nyaa/tests/) (stubbed `fetch`/`$habari`/`$scannerUtils`, live nyaa.si + graphql.anilist.co). Run from that directory:
+
+```
+npm test
+```
+
 ### 🇬🇧 EN — MangaDex (Manga)
 
 - **ID:** `mangadex`

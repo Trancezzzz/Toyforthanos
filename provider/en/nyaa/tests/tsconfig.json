@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "commonjs",
+    "lib": ["es2022"],
+    "rootDir": "..",
+    "outDir": "out",
+    "skipLibCheck": true,
+    "noEmitOnError": false,
+    "strict": false
+  },
+  "files": ["../provider.ts", "shim.d.ts"]
+}
