@@ -41,6 +41,27 @@ https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/it/ani
 https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/subsplease/manifest.json
 ```
 
+### 🌐 Multi — Nyaa+ (Torrent)
+
+- **ID:** `nyaa-plus`
+- **Site:** [nyaa.si](https://nyaa.si)
+- **Type:** Anime Torrent Provider — improved drop-in for the stock Island Nyaa provider
+- **Lang:** Multi (English / Romaji / Japanese titles searched automatically)
+- **Manifest:** [`provider/en/nyaa/manifest.json`](provider/en/nyaa/manifest.json)
+
+```
+https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/nyaa/manifest.json
+```
+
+What's better than the stock provider:
+- **All smart-search options show in the UI** — batch, episode number, resolution, query *and* best releases (the stock one is missing `bestReleases`)
+- **Instant magnets** — built straight from the RSS info hash, no torrent-page scraping (stock fetches every page)
+- **Accurate season/episode handling** — explicit-marker extraction that never misfires on numeric titles (`86`, `91 Days`), season/part verification, multi-season packs, absolute episode numbering via `absoluteSeasonOffset`
+- **Multi-language queries** — English, Romaji and Japanese synonyms are all queried and matched
+- **Performance** — parallel query fan-out, 3-min TTL cache, dedupe by info hash, results capped & sorted by seeders
+
+> Tip: if you also have the built-in *Nyaa* provider installed, disable it in Settings → Extensions so `Nyaa+` is the default.
+
 ### 🇬🇧 EN — MangaDex (Manga)
 
 - **ID:** `mangadex`
