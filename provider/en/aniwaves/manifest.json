@@ -3,7 +3,7 @@
   "name": "Aniwave",
   "description": "Aniwave.ru anime streaming provider.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/aniwaves/manifest.json",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Trancezzz",
   "type": "onlinestream-provider",
   "language": "typescript",
