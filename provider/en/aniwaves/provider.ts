@@ -110,9 +110,11 @@ class Provider {
     }
 
     async findEpisodeServer(episode: { id: string }, server: string): Promise<any> {
+        console.log(`[aniwaves] findEpisodeServer episode=${episode.id} server=${server}`)
         const json = await fetchJson(`${BASE}/ajax/server/list?servers=${episode.id}`, {
             Referer: `${BASE}/watch/${episode.id}`, "X-Requested-With": "XMLHttpRequest"
         })
+        console.log(`[aniwaves] server list status=${json?.status} servers=${json?.result ? json.result.match(/<li[^>]*data-link-id/g)?.length ?? 0 : 0}`)
         if (!json || !json.result) throw new Error("No server list")
         const html = json.result as string
         // find the <li> whose text matches the requested server (case-insensitive)
@@ -126,11 +128,13 @@ class Provider {
                 chosenLinkId = m[1]; chosenName = name
             }
         }
+        console.log(`[aniwaves] matched server=${chosenName} linkId=${chosenLinkId ? chosenLinkId.slice(0, 12) + '...' : 'none'} available=[${servers.map(s => s.name).join(', ')}]`)
         if (!chosenLinkId && servers.length) { chosenLinkId = servers[0].linkId; chosenName = servers[0].name }
         if (!chosenLinkId) throw new Error("No server found")
         const srcJson = await fetchJson(`${BASE}/ajax/sources?id=${chosenLinkId}&asi=0&autoPlay=0`, {
             Referer: `${BASE}/watch/${episode.id}`, "X-Requested-With": "XMLHttpRequest"
         })
+        console.log(`[aniwaves] sources status=${srcJson?.status} url=${srcJson?.result?.url ? srcJson.result.url.slice(0, 70) + '...' : 'NONE'}`)
         if (!srcJson || !srcJson.result) throw new Error("No stream found")
         const url = srcJson.result.url || ""
         return {

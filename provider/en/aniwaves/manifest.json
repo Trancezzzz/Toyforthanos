@@ -8,7 +8,7 @@
   "type": "onlinestream-provider",
   "language": "typescript",
   "lang": "en",
-  "icon": "https://aniwaves.ru/favicon.ico",
+  "icon": "https://aniwaves.ru/assets/images/favicons/favicon-96x96.png",
   "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/aniwaves/provider.ts",
   "isDevelopment": false
 }
