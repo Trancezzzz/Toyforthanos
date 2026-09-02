@@ -1,0 +1,46 @@
+{
+  "id": "sukebei",
+  "name": "Sukebei",
+  "description": "Sukebei.nyaa.si — adult anime torrent provider. Supports art (anime, doujinshi, games, manga, pictures) and real-life (photos, videos) categories. Adult content enabled.",
+  "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/sukebei/manifest.json",
+  "version": "1.0.0",
+  "semverConstraint": ">= 3.5.1",
+  "author": "Trancezzz",
+  "type": "anime-torrent-provider",
+  "language": "typescript",
+  "lang": "multi",
+  "icon": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/sukebei/icon.png",
+  "userConfig": {
+    "requiresConfig": false,
+    "version": 1,
+    "fields": [
+      {
+        "name": "apiUrl",
+        "label": "API URL (comma-separated mirrors: sukebei.nyaa.si)",
+        "type": "text",
+        "default": "https://sukebei.nyaa.si"
+      },
+      {
+        "name": "category",
+        "label": "Category (1_0=art, 1_1=anime, 1_2=doujinshi, 1_3=games, 1_4=manga, 1_5=pictures, 2_0=real, 2_1=real-pictures, 2_2=real-videos)",
+        "type": "text",
+        "default": "1_1"
+      },
+      {
+        "name": "filter",
+        "label": "Filter (0 = none, 1 = no remakes, 2 = trusted only)",
+        "type": "text",
+        "default": "0"
+      },
+      {
+        "name": "maxResults",
+        "label": "Max results per query",
+        "type": "text",
+        "default": "60"
+      }
+    ]
+  },
+  "payloadURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/sukebei/provider.ts",
+  "payload": "",
+  "isDevelopment": false
+}

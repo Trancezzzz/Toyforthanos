@@ -80,6 +80,31 @@ What's better than the stock provider:
 npm test
 ```
 
+### 🌐 Multi — Sukebei (Torrent)
+
+- **ID:** `sukebei`
+- **Site:** [sukebei.nyaa.si](https://sukebei.nyaa.si)
+- **Type:** Anime Torrent Provider — adult/hentai content
+- **Lang:** Multi (English / Romaji / Japanese titles searched automatically)
+- **Manifest:** [`provider/en/sukebei/manifest.json`](provider/en/sukebei/manifest.json)
+
+```
+https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/sukebei/manifest.json
+```
+
+Sukebei is the adult counterpart to Nyaa.si, hosting hentai, doujinshi, and real-life anime torrents.
+
+What it supports:
+- **Art categories** — anime, doujinshi, games, manga, pictures
+- **Real-life categories** — photos, videos
+- **Smart search** — batch, episode number, resolution, query, best releases
+- **Instant magnets** — built from RSS info hashes, no torrent-page scraping
+- **Multi-language queries** — English, Romaji and Japanese synonyms
+- **Seeders-first sorting** with quality-aware best-releases picking
+- **Configurable** — API URL, category, filter, max results
+
+> Tip: sukebei.nyaa.si is a separate site from nyaa.si. Install this provider alongside Nyaa+ if you want both non-adult and adult torrent sources in Seanime.
+
 ### 🇬🇧 EN — MangaDex (Manga)
 
 - **ID:** `mangadex`
