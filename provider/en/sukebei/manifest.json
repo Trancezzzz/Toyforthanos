@@ -3,7 +3,7 @@
   "name": "Sukebei",
   "description": "Sukebei.nyaa.si — adult anime torrent provider. Supports art (anime, doujinshi, games, manga, pictures) and real-life (photos, videos) categories. Adult content enabled.",
   "manifestURI": "https://raw.githubusercontent.com/Trancezzzz/Toyforthanos/master/provider/en/sukebei/manifest.json",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "semverConstraint": ">= 3.5.1",
   "author": "Trancezzz",
   "type": "anime-torrent-provider",
