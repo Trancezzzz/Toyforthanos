@@ -46,7 +46,7 @@ const TRACKERS = [
     "udp://1337.abcvg.info:80/announce",
 ]
 
- //@ts-ignore
+//@ts-ignore
 class Provider {
     canSmartSearch = true
     supportsAdult = true
@@ -69,8 +69,26 @@ class Provider {
     async search(options: AnimeSearchOptions): Promise<AnimeTorrent[]> {
         try {
             const q = (options.query || "").trim()
-            const raw = await this.fetchRSS(q, "seeders")
-            const torrents = raw.slice(0, this.getConfig().maxResults).map(t => this.toAnimeTorrent(t))
+            const queries = this.expandSearchQueries(q)
+            const results: RawTorrent[] = []
+            const seen = new Set<string>()
+
+            for (const query of queries) {
+                try {
+                    const raw = await this.fetchRSS(query, "seeders")
+                    for (const t of raw) {
+                        const key = t.infoHash || t.downloadUrl || t.link
+                        if (!seen.has(key)) {
+                            seen.add(key)
+                            results.push(t)
+                        }
+                    }
+                } catch (e) {
+                    console.error("sukebei: query failed (" + query + "): " + (e as Error).message)
+                }
+            }
+
+            let torrents = results.map(t => this.toAnimeTorrent(t))
             torrents.sort(this.compareTorrents)
             return torrents
         } catch (error) {
@@ -103,7 +121,7 @@ class Provider {
 
             let queries: string[]
             if (userQuery) {
-                queries = [userQuery]
+                queries = this.expandSearchQueries(userQuery)
             } else if (batch && canBatch && !isMovie) {
                 queries = this.buildBatchQueries(titles, media, resolution)
             } else if (isMovie) {
@@ -370,7 +388,10 @@ class Provider {
 
     private extractResolutionFallback(name: string): string {
         const m = name.match(/\b(2160|1440|1080|720|540|480|360)\s?[pP]\b/)
-        return m ? m[1] : ""
+        if (m) return m[1]
+        const resMatch = name.match(/(\d{3,4})p/i)
+        if (resMatch) return resMatch[1]
+        return ""
     }
 
     private extractEpisodeFallback(name: string): number {
@@ -384,11 +405,32 @@ class Provider {
             const ep = parseInt(m[1], 10)
             if (ep >= 1 && ep <= 1000) return ep
         }
+        m = name.match(/\b(\d{1,3})\s*[-~]\s*(\d{1,3})/i)
+        if (m) {
+            const start = parseInt(m[1], 10), end = parseInt(m[2], 10)
+            if (end > start && start >= 1 && end <= 300) return -2
+        }
+        m = name.match(/\bPart\s*(\d{1,3})/i)
+        if (m) {
+            const ep = parseInt(m[1], 10)
+            if (ep >= 1 && ep <= 1000) return ep
+        }
+        m = name.match(/S(\d{1,2})E(\d{1,2})/i)
+        if (m) {
+            const ep = parseInt(m[2], 10)
+            if (ep >= 1 && ep <= 1000) return ep
+        }
+        m = name.match(/(\d{1,3})(?:st|nd|rd|th)\s*(?:EP|EP\.?)/i)
+        if (m) {
+            const ep = parseInt(m[1], 10)
+            if (ep >= 1 && ep <= 1000) return ep
+        }
         return -1
     }
 
     private isTorrentLikelyBatch(name: string): boolean {
         if (/\b(?:Batch)\b/i.test(name)) return true
+        if (/\bcomplete\s+(?:series|collection)\b/i.test(name)) return true
         if (/\bcomplete\b/i.test(name)) return true
 
         let m = name.match(/(?:^|[\s\[\(])0*(\d{1,3})\s*[-~]\s*0*(\d{1,3})(?:[\s\]\)]|$)/)
@@ -399,10 +441,44 @@ class Provider {
 
         if (/\be\d{1,3}\s*[-~]\s*e?\d{1,3}\b/i.test(name)) return true
         if (/\bVol\.?\s*\d+\s*[-~]\s*\d+/i.test(name)) return true
-        if (/\bseasons?\s*\d+\s*[-~]\s*\d+/i.test(name)) return true
+        if (/\bseasons?\s+\d+\s*[-~]\s*\d+/i.test(name)) return true
         if (/\bS\d{1,2}\s*[-~+]\s*S?\d{1,2}\b/i.test(name)) return true
+        if (/\bParts?\s+\d+\s*[-~]\s*\d+/i.test(name)) return true
 
         return false
+    }
+
+    private stripTheAnimationSuffix(title: string): string {
+        return title.replace(/(?:\s|_|\.)The\s+Animation(?:ion)?\s*$/i, "").trim()
+    }
+
+    private simplifyQuery(query: string): string {
+        let q = query
+            .replace(/[,;]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+        return this.stripTheAnimationSuffix(q)
+    }
+
+    private expandSearchQueries(query: string): string[] {
+        const simplified = this.simplifyQuery(query)
+        const queries: string[] = [query, simplified]
+
+        if (simplified !== query) {
+            queries.push(simplified)
+        }
+
+        const withoutParticle = simplified.replace(/\s+(?:o|no|na|ni|too|te)\s+/gi, " ").trim()
+        if (withoutParticle !== simplified && withoutParticle.length > 0) {
+            queries.push(withoutParticle)
+        }
+
+        const shortForm = simplified.split(/\s+/).slice(0, 4).join(" ")
+        if (shortForm.length > 5 && shortForm !== simplified) {
+            queries.push(shortForm)
+        }
+
+        return queries
     }
 
     private markBestReleases(torrents: AnimeTorrent[]): void {
@@ -505,6 +581,24 @@ class Provider {
         if (secondary) {
             queries.push(secondary + " " + epGroup + resStr.trim())
             queries.push(secondary + resStr)
+        }
+
+        const simplifiedPrimary = this.simplifyQuery(primary)
+        if (simplifiedPrimary !== primary) {
+            queries.push(simplifiedPrimary + " " + epGroup + resStr.trim())
+            queries.push(simplifiedPrimary + resStr)
+        }
+
+        const withoutThe = this.stripTheAnimationSuffix(primary)
+        if (withoutThe !== primary && withoutThe.length > 0) {
+            queries.push(withoutThe + " " + epGroup + resStr.trim())
+            queries.push(withoutThe + resStr)
+        }
+
+        const shortPrimary = primary.split(/\s+/).slice(0, 4).join(" ")
+        if (shortPrimary.length > 5 && shortPrimary !== primary) {
+            queries.push(shortPrimary + " " + epGroup + resStr.trim())
+            queries.push(shortPrimary + resStr)
         }
 
         return queries
