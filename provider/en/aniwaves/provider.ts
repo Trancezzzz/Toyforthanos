@@ -117,18 +117,19 @@ class Provider {
         console.log(`[aniwaves] server list status=${json?.status} servers=${json?.result ? json.result.match(/<li[^>]*data-link-id/g)?.length ?? 0 : 0}`)
         if (!json || !json.result) throw new Error("No server list")
         const html = json.result as string
-        // find the <li> whose text matches the requested server (case-insensitive)
-        const liRe = /<li[^>]*data-link-id="([^"]+)"[^>]*>([\s\S]*?)<\/li>/gi
-        let m, chosenLinkId = "", chosenName = ""
-        const servers: { name: string; linkId: string }[] = []
+        // find the <li> whose text matches the requested server (case-insensitive), tracking sub/dub
+        const liRe = /<li[^>]*data-link-id="([^"]+)"[^>]*data-type="(\w+)"[^>]*>([\s\S]*?)<\/li>/gi
+        let m, chosenLinkId = "", chosenName = "", chosenType = ""
+        const servers: { name: string; linkId: string; type: string }[] = []
         while ((m = liRe.exec(html)) !== null) {
-            const name = m[2].replace(/<[^>]+>/g, " ").trim()
-            servers.push({ name, linkId: m[1] })
+            const name = m[3].replace(/<[^>]+>/g, " ").trim()
+            const stype = m[2]
+            servers.push({ name, linkId: m[1], type: stype })
             if (!chosenLinkId && name.toLowerCase() === server.toLowerCase()) {
-                chosenLinkId = m[1]; chosenName = name
+                chosenLinkId = m[1]; chosenName = name; chosenType = stype
             }
         }
-        console.log(`[aniwaves] matched server=${chosenName} linkId=${chosenLinkId ? chosenLinkId.slice(0, 12) + '...' : 'none'} available=[${servers.map(s => s.name).join(', ')}]`)
+        console.log(`[aniwaves] matched server=${chosenName} (${chosenType}) linkId=${chosenLinkId ? chosenLinkId.slice(0, 12) + '...' : 'none'} available=${servers.map(s => s.name + '(' + s.type + ')').join(', ')}`)
         if (!chosenLinkId && servers.length) { chosenLinkId = servers[0].linkId; chosenName = servers[0].name }
         if (!chosenLinkId) throw new Error("No server found")
         const srcJson = await fetchJson(`${BASE}/ajax/sources?id=${chosenLinkId}&asi=0&autoPlay=0`, {
